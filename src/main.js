@@ -12,8 +12,14 @@ app.disableHardwareAcceleration();
 let mainWindow;
 const isDev = process.env.NODE_ENV === 'development';
 
-// App data path
-const APP_DATA_PATH = path.join(os.homedir(), 'AppData', 'Roaming', 'LoloClient');
+// App data path (per piattaforma: %APPDATA% su Windows, XDG su Linux, Application Support su macOS)
+function defaultAppDataPath() {
+    const home = os.homedir();
+    if (process.platform === 'win32') return path.join(home, 'AppData', 'Roaming', 'LoloClient');
+    if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'LoloClient');
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'LoloClient');
+}
+const APP_DATA_PATH = defaultAppDataPath();
 
 function encryptSensitive(data) {
     try {
@@ -616,7 +622,7 @@ async function findJavaAsync() {
         'java',
         isWin ? 'javaw' : null
     ].filter(Boolean);
-    // Scansiona le directory di installazione standard su Windows (più recenti prima).
+    // Scansiona le directory di installazione standard (più recenti prima).
     if (isWin) {
         for (const root of ['C:/Program Files/Eclipse Adoptium', 'C:/Program Files/Java', 'C:/Program Files/Microsoft']) {
             try {
@@ -625,6 +631,14 @@ async function findJavaAsync() {
                     .sort()
                     .reverse();
                 for (const entry of entries) candidates.push(path.join(root, entry, 'bin', 'java.exe'));
+            } catch (e) {}
+        }
+    } else if (process.platform === 'linux') {
+        // Percorso standard dei JDK su Debian/Ubuntu/Mint (apt) e derivate.
+        for (const root of ['/usr/lib/jvm']) {
+            try {
+                const entries = fs.readdirSync(root).sort().reverse();
+                for (const entry of entries) candidates.push(path.join(root, entry, 'bin', 'java'));
             } catch (e) {}
         }
     }
@@ -661,12 +675,13 @@ function cdsLaunchArgs(instancePath) {
 
 function findJavaExec(preferred) {
     if (preferred && preferred.trim()) return preferred.trim();
+    const javaBin = process.platform === 'win32' ? 'java.exe' : 'java';
     const candidates = [
-        'java', 'javaw',
-        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java.exe') : null
+        'java',
+        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', javaBin) : null
     ].filter(Boolean);
     for (const p of candidates) {
-        if (p === 'java' || p === 'javaw') return p;
+        if (p === 'java') return p;
         if (fs.existsSync(p)) return p;
     }
     return 'java';
@@ -1034,10 +1049,10 @@ ipcMain.handle('import:run', async (event, payload) => {
 ipcMain.handle('select-java-path', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Seleziona Java',
-        filters: [
-            { name: 'Java Executable', extensions: ['exe'] },
-            { name: 'All Files', extensions: ['*'] }
-        ],
+        // Su Linux/macOS il binario "java" non ha estensione: il filtro .exe vale solo su Windows.
+        filters: process.platform === 'win32'
+            ? [{ name: 'Java Executable', extensions: ['exe'] }, { name: 'All Files', extensions: ['*'] }]
+            : [{ name: 'All Files', extensions: ['*'] }],
         properties: ['openFile']
     });
 
