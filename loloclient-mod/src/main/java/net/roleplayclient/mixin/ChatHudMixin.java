@@ -30,11 +30,12 @@ public class ChatHudMixin {
         String s = message.getString();
         RoleplayConfig.Face face = null;
         if (RoleplayClientMod.config().isEnabled("volti")) {
-            FacesManager.ChatMatch m = FacesManager.matchChatFace(s);
-            if (m != null) {
-                face = m.face();
-            } else {
-                face = FacesManager.consumeChatFace(s);
+            // Prima il percorso affidabile (marker dal sender reale), poi il
+            // fallback euristico sul testo della riga.
+            face = FacesManager.consumeChatFace(s);
+            if (face == null) {
+                FacesManager.ChatMatch m = FacesManager.matchChatFace(s);
+                if (m != null) face = m.face();
             }
         }
         boolean mention = RoleplayClientMod.config().isEnabled("menzioni") && MentionsManager.consume(s);

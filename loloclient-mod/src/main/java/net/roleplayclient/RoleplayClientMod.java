@@ -101,10 +101,20 @@ public class RoleplayClientMod implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(RoleplayClientMod::tick);
     }
 
+    private static boolean prevLeftDown;
+    private static boolean prevRightDown;
+
     private static void tick(MinecraftClient client) {
-        // Contatore CPS (nessun mixin necessario)
-        if (client.mouse.wasLeftButtonClicked()) ClickCounter.registerLeft();
-        if (client.mouse.wasRightButtonClicked()) ClickCounter.registerRight();
+        // Contatore CPS: rilevamento del fronte di pressione (down && !prevDown).
+        // wasLeftButtonClicked() è uno stato "tenuto premuto", non un evento:
+        // campionarlo per tick contava ~20 CPS a pulsante tenuto.
+        long handle = client.getWindow().getHandle();
+        boolean leftDown = org.lwjgl.glfw.GLFW.glfwGetMouseButton(handle, org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT) == org.lwjgl.glfw.GLFW.GLFW_PRESS;
+        boolean rightDown = org.lwjgl.glfw.GLFW.glfwGetMouseButton(handle, org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT) == org.lwjgl.glfw.GLFW.GLFW_PRESS;
+        if (leftDown && !prevLeftDown) ClickCounter.registerLeft();
+        if (rightDown && !prevRightDown) ClickCounter.registerRight();
+        prevLeftDown = leftDown;
+        prevRightDown = rightDown;
 
         // Zoom con transizione morbida
         boolean zoom = config.isEnabled("zoom") && ZOOM_KEY.isPressed();

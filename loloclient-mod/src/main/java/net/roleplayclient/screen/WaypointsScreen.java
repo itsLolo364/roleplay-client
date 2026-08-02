@@ -27,18 +27,20 @@ public class WaypointsScreen extends RoleplayListScreen {
     protected void init() {
         super.init();
         int y = this.height - 44;
-        field = new TextFieldWidget(this.textRenderer, 12, y, this.width - 360, 20, Text.literal(""));
+        // Clamp: a GUI scale alte this.width può scendere sotto i 360px e
+        // larghezze/X negative producono widget invisibili o non cliccabili.
+        field = new TextFieldWidget(this.textRenderer, 12, y, Math.max(60, this.width - 360), 20, Text.literal(""));
         field.setMaxLength(40);
         field.setPlaceholder(Text.literal("Nome waypoint"));
         this.addDrawableChild(field);
 
         addBtn = ButtonWidget.builder(Text.literal("Aggiungi attuale"), b -> addCurrent())
-                .dimensions(this.width - 340, y, 140, 20)
+                .dimensions(Math.max(12, this.width - 340), y, 140, 20)
                 .build();
         this.addDrawableChild(addBtn);
 
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Aggiorna"), b -> renameSelected())
-                .dimensions(this.width - 192, y, 80, 20)
+                .dimensions(Math.max(12, this.width - 192), y, 80, 20)
                 .build());
     }
 

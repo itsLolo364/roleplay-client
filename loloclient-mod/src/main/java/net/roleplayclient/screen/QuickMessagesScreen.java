@@ -33,13 +33,13 @@ public class QuickMessagesScreen extends RoleplayListScreen {
     protected void init() {
         super.init();
         int y = this.height - 44;
-        field = new TextFieldWidget(this.textRenderer, 12, y, this.width - 240, 20, Text.literal(""));
+        field = new TextFieldWidget(this.textRenderer, 12, y, Math.max(60, this.width - 240), 20, Text.literal(""));
         field.setMaxLength(200);
         field.setPlaceholder(Text.literal("Testo o comando (es. /me ...)"));
         this.addDrawableChild(field);
 
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Aggiungi"), b -> addMessage())
-                .dimensions(this.width - 220, y, 100, 20)
+                .dimensions(Math.max(12, this.width - 220), y, 100, 20)
                 .build());
     }
 

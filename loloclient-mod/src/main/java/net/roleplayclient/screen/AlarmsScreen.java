@@ -35,13 +35,13 @@ public class AlarmsScreen extends RoleplayListScreen {
         timeField.setPlaceholder(Text.literal("HH:mm"));
         this.addDrawableChild(timeField);
 
-        msgField = new TextFieldWidget(this.textRenderer, 80, y, this.width - 300, 20, Text.literal(""));
+        msgField = new TextFieldWidget(this.textRenderer, 80, y, Math.max(60, this.width - 300), 20, Text.literal(""));
         msgField.setMaxLength(60);
         msgField.setPlaceholder(Text.literal("Messaggio"));
         this.addDrawableChild(msgField);
 
         addBtn = ButtonWidget.builder(Text.literal("Aggiungi"), b -> addOrUpdate())
-                .dimensions(this.width - 210, y, 90, 20)
+                .dimensions(Math.max(12, this.width - 210), y, 90, 20)
                 .build();
         this.addDrawableChild(addBtn);
     }

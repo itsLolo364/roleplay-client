@@ -199,8 +199,10 @@ public final class RcShell {
     }
 
     public static void beginScissor(DrawContext ctx, int x, int y, int w, int h) {
-        if (w <= 0 || h <= 0) return;
-        ctx.enableScissor(x, y, x + w, y + h);
+        // Push incondizionato (area clampata a vuota se degenere): i chiamanti
+        // chiamano sempre endScissor, e un push saltato farebbe underflow
+        // dello ScissorStack alla pop successiva.
+        ctx.enableScissor(x, y, x + Math.max(0, w), y + Math.max(0, h));
     }
 
     public static void endScissor(DrawContext ctx) {
