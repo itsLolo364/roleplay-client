@@ -90,32 +90,76 @@ public class RoleplayConfig {
         return Files.exists(old) ? old : null;
     }
 
+    /**
+     * Conserva una copia del file corrotto: il prossimo save() lo sovrascriverebbe
+     * e l'utente perderebbe ogni possibilità di recupero manuale.
+     */
+    private static void backupCorrupt(Path src) {
+        try {
+            Path bak = src.resolveSibling(src.getFileName().toString() + ".bak");
+            Files.copy(src, bak, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            System.err.println("[RoleplayClient] Config corrotta, copia salvata in " + bak);
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Impossibile salvare il backup della config corrotta: " + e.getMessage());
+        }
+    }
+
     public static RoleplayConfig load() {
         RoleplayConfig c = new RoleplayConfig();
+        Path src;
         try {
-            Path src = existingSource();
-            if (src == null) return c;
-            boolean migrated = !src.equals(path());
+            src = existingSource();
+        } catch (Exception e) {
+            return c;
+        }
+        if (src == null) return c;
+        boolean migrated = !src.equals(path());
+
+        JsonObject obj;
+        try {
             String json = Files.readString(src, StandardCharsets.UTF_8);
-            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+            obj = JsonParser.parseString(json).getAsJsonObject();
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Errore caricamento config: " + e.getMessage());
+            e.printStackTrace();
+            backupCorrupt(src);
+            return c;
+        }
+
+        // Ogni sezione (e ogni elemento delle liste) viene letta con il proprio
+        // try/catch: un dato malformato non deve buttare via tutto il resto,
+        // perché il primo save() successivo riscriverebbe il file troncato.
+        try {
             JsonObject mods = obj.getAsJsonObject("modules");
-                if (mods != null) {
-                    for (String m : Packages.all().keySet()) {
-                        if (mods.has(m)) c.modules.put(m, mods.get(m).getAsBoolean());
-                    }
+            if (mods != null) {
+                for (String m : Packages.all().keySet()) {
+                    if (mods.has(m)) c.modules.put(m, mods.get(m).getAsBoolean());
                 }
-                JsonObject pos = obj.getAsJsonObject("positions");
-                if (pos != null) {
-                    for (Map.Entry<String, com.google.gson.JsonElement> e : pos.entrySet()) {
+            }
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione modules ignorata: " + e.getMessage());
+        }
+        try {
+            JsonObject pos = obj.getAsJsonObject("positions");
+            if (pos != null) {
+                for (Map.Entry<String, com.google.gson.JsonElement> e : pos.entrySet()) {
+                    try {
                         JsonObject o = e.getValue().getAsJsonObject();
                         if (o.has("x") && o.has("y")) {
                             c.positions.put(e.getKey(), new HudPos((float) o.get("x").getAsDouble(), (float) o.get("y").getAsDouble()));
                         }
+                    } catch (Exception ignored) {
                     }
                 }
-                JsonArray fc = obj.getAsJsonArray("faces");
-                if (fc != null) {
-                    for (var el : fc) {
+            }
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione positions ignorata: " + e.getMessage());
+        }
+        try {
+            JsonArray fc = obj.getAsJsonArray("faces");
+            if (fc != null) {
+                for (var el : fc) {
+                    try {
                         if (el.isJsonPrimitive()) {
                             c.faces.add(new Face(el.getAsString(), ""));
                         } else {
@@ -134,17 +178,32 @@ public class RoleplayConfig {
                                     o.has("atlantis") && o.get("atlantis").getAsBoolean(),
                                     servers));
                         }
+                    } catch (Exception ignored) {
                     }
                 }
-                JsonArray qm = obj.getAsJsonArray("quickMessages");
-                if (qm != null) for (var el : qm) c.quickMessages.add(el.getAsString());
-                JsonArray qk = obj.getAsJsonArray("quickKeys");
-                if (qk != null) for (var el : qk) c.quickKeys.add(el.getAsString());
-                while (c.quickKeys.size() < c.quickMessages.size()) c.quickKeys.add("");
-                while (c.quickKeys.size() > c.quickMessages.size()) c.quickKeys.remove(c.quickKeys.size() - 1);
-                JsonArray wp = obj.getAsJsonArray("waypoints");
-                if (wp != null) {
-                    for (var el : wp) {
+            }
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione faces ignorata: " + e.getMessage());
+        }
+        try {
+            JsonArray qm = obj.getAsJsonArray("quickMessages");
+            if (qm != null) for (var el : qm) c.quickMessages.add(el.getAsString());
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione quickMessages ignorata: " + e.getMessage());
+        }
+        try {
+            JsonArray qk = obj.getAsJsonArray("quickKeys");
+            if (qk != null) for (var el : qk) c.quickKeys.add(el.getAsString());
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione quickKeys ignorata: " + e.getMessage());
+        }
+        while (c.quickKeys.size() < c.quickMessages.size()) c.quickKeys.add("");
+        while (c.quickKeys.size() > c.quickMessages.size()) c.quickKeys.remove(c.quickKeys.size() - 1);
+        try {
+            JsonArray wp = obj.getAsJsonArray("waypoints");
+            if (wp != null) {
+                for (var el : wp) {
+                    try {
                         JsonObject o = el.getAsJsonObject();
                         c.waypoints.add(new Waypoint(
                                 o.has("name") ? o.get("name").getAsString() : "",
@@ -152,23 +211,31 @@ public class RoleplayConfig {
                                 o.has("x") ? o.get("x").getAsDouble() : 0,
                                 o.has("y") ? o.get("y").getAsDouble() : 0,
                                 o.has("z") ? o.get("z").getAsDouble() : 0));
+                    } catch (Exception ignored) {
                     }
                 }
-                JsonArray al = obj.getAsJsonArray("alarms");
-                if (al != null) {
-                    for (var el : al) {
+            }
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione waypoints ignorata: " + e.getMessage());
+        }
+        try {
+            JsonArray al = obj.getAsJsonArray("alarms");
+            if (al != null) {
+                for (var el : al) {
+                    try {
                         JsonObject o = el.getAsJsonObject();
                         c.alarms.add(new Alarm(
                                 o.has("time") ? o.get("time").getAsString() : "00:00",
                                 o.has("message") ? o.get("message").getAsString() : "Sveglia!",
                                 !o.has("enabled") || o.get("enabled").getAsBoolean()));
+                    } catch (Exception ignored) {
                     }
                 }
-            if (migrated) c.save();
+            }
         } catch (Exception e) {
-            System.err.println("[RoleplayClient] Errore caricamento config: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("[RoleplayClient] Config: sezione alarms ignorata: " + e.getMessage());
         }
+        if (migrated) c.save();
         return c;
     }
 

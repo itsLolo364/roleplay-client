@@ -77,8 +77,12 @@ public class FaceEditScreen extends Screen {
         if (nickField != null) nick = nickField.getText();
         if (loreField != null) lore = loreField.getText();
         if (descField != null) desc = descField.getText();
-        serverValues.clear();
-        for (TextFieldWidget sf : serverFields) serverValues.add(sf.getText());
+        // In modalità AtlantisRP i campi server non esistono: non azzerare la
+        // lista salvata, altrimenti un doppio toggle la cancella per sempre.
+        if (!serverFields.isEmpty()) {
+            serverValues.clear();
+            for (TextFieldWidget sf : serverFields) serverValues.add(sf.getText());
+        }
     }
 
     private void addServer() {

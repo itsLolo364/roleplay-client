@@ -62,8 +62,12 @@ public class RoleplayClientMod implements ClientModInitializer {
             java.nio.file.Files.writeString(dir.resolve("restart.json"),
                     "{\"action\":\"restart\"}", java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
+            // Se il segnale non è stato scritto il launcher non riavvierebbe nulla:
+            // meglio restare in gioco che chiudersi senza ritorno.
             System.err.println("[RoleplayClient] Errore richiesta restart: " + e.getMessage());
             e.printStackTrace();
+            showToast("Riavvio non riuscito: impossibile scrivere il segnale per il launcher");
+            return;
         }
         MinecraftClient.getInstance().scheduleStop();
     }
