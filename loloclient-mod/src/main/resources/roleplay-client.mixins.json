@@ -1,0 +1,15 @@
+{
+    "required": true,
+    "package": "net.roleplayclient.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "GameRendererMixin",
+        "ChatHudMixin",
+        "PlayerListHudMixin",
+        "MinecraftClientMixin",
+        "ScreenMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+
+# Electron / installer build
+dist/
+out/
+*.exe
+*.exe.blockmap
+builder-debug.yml
+builder-effective-config.yaml
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editor
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Cache / temp
+.cache/
+*.cache
+javac.*.args
+
+# Local UI experiments
+test-cube.html
+test-cube-main.js
+test-face.html
+test-face-main.js
+
+# Minecraft runtime downloaded into the project tree (dev leftovers).
+# Leading `/` = solo root del repo (non tocca assets/mods bundlate).
+/libraries/
+/versions/
+/mods/
+/.fabric/
+/.fabric-installer/
+/natives/
+/crash-reports/
+/logs/
+/saves/
+/resourcepacks/
+/shaderpacks/
+/screenshots/
+/.roleplay-client/
+
+# Gradle / Fabric Loom (mod)
+.gradle/
+**/build/
+loloclient-mod/.gradle/
+loloclient-mod/build/
+loloclient-mod/run/
+loloclient-mod/out/

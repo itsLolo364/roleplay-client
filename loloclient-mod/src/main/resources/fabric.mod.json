@@ -1,0 +1,27 @@
+{
+    "schemaVersion": 1,
+    "id": "roleplay-client",
+    "version": "${version}",
+    "name": "Roleplay Client",
+    "description": "Mod del Roleplay Client: menu mod Liquid Glass, HUD modulare con effetto immediato e gestione mod dell'istanza",
+    "authors": [
+        "LoloCass"
+    ],
+    "contact": {},
+    "license": "MIT",
+    "environment": "client",
+    "entrypoints": {
+        "client": [
+            "net.roleplayclient.RoleplayClientMod"
+        ]
+    },
+    "mixins": [
+        "roleplay-client.mixins.json",
+        "roleplay-client.mixins-bettertab.json"
+    ],
+    "depends": {
+        "fabricloader": ">=0.14.0",
+        "fabric-api": "*",
+        "minecraft": "~1.21.8"
+    }
+}

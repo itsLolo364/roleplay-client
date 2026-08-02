@@ -1,0 +1,72 @@
+{
+  "name": "roleplay-client",
+  "version": "1.0.0",
+  "description": "Roleplay Client - Minecraft Launcher",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64",
+    "pack": "electron-builder --dir",
+    "package:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1",
+    "package:installer:quick": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1 -SkipMod"
+  },
+  "author": "LoloCass",
+  "license": "MIT",
+  "dependencies": {
+    "adm-zip": "^0.5.18",
+    "electron-store": "^8.1.0",
+    "minecraft-launcher-core": "^3.16.8",
+    "msmc": "^5.0.5"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.roleplayclient.minecraft",
+    "productName": "Roleplay Client",
+    "copyright": "Copyright © LoloCass",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "public/**/*",
+      "lib/**/*"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "RoleplayClient-Setup-${version}.${ext}",
+      "signAndEditExecutable": false,
+      "signingHashAlgorithms": []
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Roleplay Client",
+      "uninstallDisplayName": "Roleplay Client",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "menuCategory": "Games"
+    }
+  }
+}

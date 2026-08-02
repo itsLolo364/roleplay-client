@@ -1,0 +1,11 @@
+{
+    "required": false,
+    "package": "net.roleplayclient.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "BetterTabTabEntryMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 0
+    }
+}

@@ -1,0 +1,15 @@
+{
+    "providers": [
+        {
+            "type": "reference",
+            "id": "minecraft:default"
+        },
+        {
+            "type": "bitmap",
+            "file": "roleplay-client:font/arrows.png",
+            "ascent": 7,
+            "height": 8,
+            "chars": ["\u2191\u2197\u2192\u2198\u2193\u2199\u2190\u2196"]
+        }
+    ]
+}
