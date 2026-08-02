@@ -3,6 +3,8 @@ const { safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { Readable } = require('stream');
+const { pipeline: streamPipeline } = require('stream/promises');
 
 // Disable hardware acceleration for better compatibility
 app.disableHardwareAcceleration();
@@ -274,14 +276,58 @@ async function projectHasVersion(projectId, mcVersion, loader) {
     }
 }
 
-async function downloadFile(url, dest) {
-    const res = await fetch(url, { headers: { 'User-Agent': 'RoleplayClient/1.0.0 (Minecraft launcher)' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
+function hashFile(filePath, algo) {
+    return new Promise((resolve, reject) => {
+        const hash = require('crypto').createHash(algo);
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', reject);
+        stream.on('data', d => hash.update(d));
+        stream.on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+// Scarica in streaming su dest+'.part' e rinomina solo a verifica completata:
+// niente buffering in RAM dell'intero file, niente file troncati al posto finale,
+// timeout di inattività così un server bloccato non appende l'installazione per sempre.
+// opts.sha512 / opts.sha1 / opts.size: verifica integrità quando il manifest la fornisce.
+async function downloadFile(url, dest, opts = {}) {
+    if (!String(url).startsWith('https://')) throw new Error(`URL non sicuro rifiutato: ${url}`);
     const dir = path.dirname(dest);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(dest, buf);
-    return dest;
+    const tmp = `${dest}.part`;
+    const controller = new AbortController();
+    const idleMs = opts.idleTimeoutMs || 30000;
+    let timer = setTimeout(() => controller.abort(), idleMs);
+    try {
+        const res = await fetch(url, {
+            headers: { 'User-Agent': 'RoleplayClient/1.0.0 (Minecraft launcher)' },
+            signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = Readable.fromWeb(res.body);
+        body.on('data', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => controller.abort(), idleMs);
+        });
+        await streamPipeline(body, fs.createWriteStream(tmp));
+        if (opts.size != null) {
+            const actual = fs.statSync(tmp).size;
+            if (actual !== opts.size) throw new Error(`Size mismatch per ${url}: attesi ${opts.size} byte, ricevuti ${actual}`);
+        }
+        if (opts.sha512 || opts.sha1) {
+            const algo = opts.sha512 ? 'sha512' : 'sha1';
+            const expected = String(opts.sha512 || opts.sha1).toLowerCase();
+            const actual = await hashFile(tmp, algo);
+            if (actual !== expected) throw new Error(`${algo.toUpperCase()} mismatch per ${url}`);
+        }
+        fs.renameSync(tmp, dest);
+        return dest;
+    } catch (err) {
+        try { fs.unlinkSync(tmp); } catch (e) {}
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 // Assicura che il pack Minecraft di default (suoni, texture, font) sia
@@ -313,7 +359,7 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
     const assetsDir = path.join(gameDir, 'assets');
     const indexPath = path.join(assetsDir, 'indexes', `${id}.json`);
     if (!fs.existsSync(indexPath)) {
-        await downloadFile(assetIndex.url, indexPath);
+        await downloadFile(assetIndex.url, indexPath, { sha1: assetIndex.sha1, size: assetIndex.size });
     }
     let index;
     try { index = JSON.parse(fs.readFileSync(indexPath, 'utf8')); } catch (e) { return null; }
@@ -332,7 +378,7 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
             const dest = path.join(objectsDir, hash.substring(0, 2), hash);
             if (!fs.existsSync(dest) || fs.statSync(dest).size !== obj.size) {
                 try {
-                    await downloadFile(`https://resources.download.minecraft.net/${hash.substring(0, 2)}/${hash}`, dest);
+                    await downloadFile(`https://resources.download.minecraft.net/${hash.substring(0, 2)}/${hash}`, dest, { sha1: hash, size: obj.size });
                 } catch (e) {
                     console.error(`[Default pack] Errore su ${hash}: ${e.message}`);
                 }
@@ -467,11 +513,50 @@ async function installProjectWithDeps(projectId, mcVersion, loader, modsDir, ins
     const dest = path.join(modsDir, file.filename);
     if (!fs.existsSync(dest)) {
         console.log(`[Modrinth] Download ${info.title}: ${file.filename}`);
-        await downloadFile(file.url, dest);
+        // Modrinth pubblica gli hash dei file: verifichiamoli.
+        await downloadFile(file.url, dest, {
+            sha512: file.hashes?.sha512,
+            sha1: file.hashes?.sha512 ? undefined : file.hashes?.sha1,
+            size: file.size
+        });
     }
     if (slug) installedKeys.add(slug);
     results.push({ fileName: file.filename, title: info.title || slug || projectId, projectId });
     return results;
+}
+
+// ===== Java detection =====
+// execFile (niente shell, niente quoting a mano) e asincrono: il probe non
+// congela il main process quando Java manca.
+function probeJava(p) {
+    return new Promise((resolve) => {
+        require('child_process').execFile(p, ['-version'], { timeout: 5000 }, (err) => resolve(!err));
+    });
+}
+
+async function findJavaAsync() {
+    const isWin = process.platform === 'win32';
+    const candidates = [
+        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', isWin ? 'java.exe' : 'java') : null,
+        'java',
+        isWin ? 'javaw' : null
+    ].filter(Boolean);
+    // Scansiona le directory di installazione standard su Windows (più recenti prima).
+    if (isWin) {
+        for (const root of ['C:/Program Files/Eclipse Adoptium', 'C:/Program Files/Java', 'C:/Program Files/Microsoft']) {
+            try {
+                const entries = fs.readdirSync(root)
+                    .filter(d => /^j(dk|re)/i.test(d))
+                    .sort()
+                    .reverse();
+                for (const entry of entries) candidates.push(path.join(root, entry, 'bin', 'java.exe'));
+            } catch (e) {}
+        }
+    }
+    for (const p of candidates) {
+        if (await probeJava(p)) return p;
+    }
+    return 'java';
 }
 
 // ===== Fast restart & AppCDS =====
@@ -1536,24 +1621,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             if (fabricLoaderPath && fs.existsSync(fabricLoaderPath)) {
                 console.log('\n=== LAUNCHING WITH FABRIC ===');
                 
-                // Find Java
-                const findJava = () => {
-                    const paths = [
-                        'java',
-                        'javaw',
-                        'C:/Program Files/Java/jdk-23/bin/java.exe',
-                        'C:/Program Files/Eclipse Adoptium/jdk-23.0.1+9-hotspot/bin/java.exe'
-                    ];
-                    for (const p of paths) {
-                        try {
-                            require('child_process').execSync(`"${p}" -version 2>&1`, { encoding: 'utf8', timeout: 5000 });
-                            return p;
-                        } catch(e) {}
-                    }
-                    return 'java';
-                };
-                
-                const javaPathFound = javaPath || findJava();
+                const javaPathFound = javaPath || await findJavaAsync();
                 console.log('Using Java:', javaPathFound);
                 
                 // Ensure MC JAR is downloaded
