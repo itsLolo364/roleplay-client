@@ -184,16 +184,51 @@ function deployModJar() {
     }
 }
 
+// Versione MC dichiarata da un jar Fabric (depends.minecraft nel fabric.mod.json),
+// es. "~1.21.8" -> "1.21.8". null se non determinabile.
+function bundledModMcVersion(jarPath) {
+    try {
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(jarPath);
+        const entry = zip.getEntry('fabric.mod.json');
+        if (!entry) return null;
+        const meta = JSON.parse(zip.readAsText(entry));
+        const dep = meta?.depends?.minecraft;
+        const constraint = Array.isArray(dep) ? dep[0] : dep;
+        if (typeof constraint !== 'string') return null;
+        const m = constraint.match(/\d+(\.\d+)+/);
+        return m ? m[0] : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Versione MC configurata per un'istanza (da instances.json), null se ignota.
+function instanceMcVersion(instanceId) {
+    try {
+        const data = getInstances();
+        const id = safeInstanceId(instanceId);
+        const inst = (data.instances || []).find(i => i.id === id);
+        return inst?.mcVersion || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Copy bundled mods (assets/mods) into the instance on first run.
 // roleplayclient.jar is always refreshed (it's the client's own mod).
 // fabric-api.jar is only copied if no fabric-api jar is already installed
 // (avoids duplicate mod ids when the user installs it via Modrinth).
+// Le mod bundled sono compilate per una specifica versione di MC: su istanze
+// con un'altra versione NON vanno copiate (Fabric si rifiuterebbe di avviarsi),
+// e una copia forzata in passato va rimossa.
 function ensureBundledMods(instanceId) {
     deployModJar();
     const modsDir = getModsDir(instanceId);
     if (!fs.existsSync(modsDir)) fs.mkdirSync(modsDir, { recursive: true });
     const bundledDir = path.join(__dirname, '..', 'assets', 'mods');
     if (!fs.existsSync(bundledDir)) return;
+    const mcVersion = instanceMcVersion(instanceId);
 
     // Rimuove i jar del vecchio client (id "loloclient" / nome "loloclientmod")
     // e le eventuali vecchie copie di "roleplayclient" già copiate: altrimenti
@@ -215,18 +250,32 @@ function ensureBundledMods(instanceId) {
     const existing = fs.readdirSync(modsDir);
     for (const f of fs.readdirSync(bundledDir)) {
         if (!f.toLowerCase().endsWith('.jar')) continue;
+        const src = path.join(bundledDir, f);
         const dest = path.join(modsDir, f);
         const isClientMod = f.toLowerCase() === 'roleplayclient.jar';
         const isFabricApi = f.toLowerCase().startsWith('fabric-api');
+
+        // Compatibilità: se conosciamo sia la versione dell'istanza sia quella
+        // richiesta dal jar bundled e non coincidono, il jar non va nell'istanza.
+        const requiredMc = bundledModMcVersion(src);
+        const incompatible = mcVersion && requiredMc && mcVersion !== requiredMc;
+        if (incompatible) {
+            if (fs.existsSync(dest)) {
+                try { fs.rmSync(dest, { force: true }); } catch (e) {}
+                console.log(`[Bundled] Rimosso ${f}: richiede MC ${requiredMc}, istanza ${mcVersion}`);
+            }
+            continue;
+        }
+
         if (isClientMod) {
-            try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+            try { fs.copyFileSync(src, dest); } catch (e) {}
         } else if (isFabricApi) {
             const hasFabricApi = existing.some(x => x.toLowerCase().startsWith('fabric-api'));
             if (!hasFabricApi) {
-                try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+                try { fs.copyFileSync(src, dest); } catch (e) {}
             }
         } else if (!fs.existsSync(dest)) {
-            try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+            try { fs.copyFileSync(src, dest); } catch (e) {}
         }
     }
 }
@@ -445,12 +494,13 @@ function isProjectInstalled(keys, info) {
 
 // Rimuove versioni precedenti della stessa mod (match per id reale o per
 // base del file senza suffisso di versione).
-function removeOlderVersions(modsDir, slug) {
+function removeOlderVersions(modsDir, slug, keepFileName = null) {
     if (!slug || !fs.existsSync(modsDir)) return;
     const s = slug.toLowerCase();
     for (const existing of fs.readdirSync(modsDir)) {
         const lower = existing.toLowerCase();
         if (!lower.endsWith('.jar')) continue;
+        if (keepFileName && existing === keepFileName) continue;
         const p = path.join(modsDir, existing);
         const id = readModId(p);
         if (id === s) { try { fs.rmSync(p, { force: true }); } catch (e) {} continue; }
@@ -523,6 +573,31 @@ async function installProjectWithDeps(projectId, mcVersion, loader, modsDir, ins
     if (slug) installedKeys.add(slug);
     results.push({ fileName: file.filename, title: info.title || slug || projectId, projectId });
     return results;
+}
+
+// ===== JVM args =====
+// Tokenizza la stringa libera dei flag JVM: spazi multipli non producono entry
+// vuote (la JVM uscirebbe con "Unrecognized option") e le virgolette tengono
+// insieme i path con spazi (es. -Dfoo="C:\Program Files\x").
+function parseJvmArgs(str) {
+    if (!str || typeof str !== 'string') return [];
+    const args = [];
+    let cur = '';
+    let quote = null;
+    for (const ch of str) {
+        if (quote) {
+            if (ch === quote) quote = null;
+            else cur += ch;
+        } else if (ch === '"' || ch === "'") {
+            quote = ch;
+        } else if (/\s/.test(ch)) {
+            if (cur) { args.push(cur); cur = ''; }
+        } else {
+            cur += ch;
+        }
+    }
+    if (cur) args.push(cur);
+    return args;
 }
 
 // ===== Java detection =====
@@ -717,11 +792,23 @@ ipcMain.handle('get-instances', () => {
 });
 
 ipcMain.handle('save-instances', (event, instances) => {
-    saveInstances(instances);
-    return { success: true };
+    try {
+        if (!instances || typeof instances !== 'object' || !Array.isArray(instances.instances)) {
+            throw new Error('Formato istanze non valido');
+        }
+        saveInstances(instances);
+        return { success: true };
+    } catch (e) {
+        console.error('save-instances:', e.message);
+        return { success: false, error: e.message };
+    }
 });
 
 ipcMain.handle('create-instance', (event, instanceData) => {
+    try {
+    if (!instanceData || typeof instanceData !== 'object') {
+        throw new Error('Dati istanza mancanti');
+    }
     const instances = getInstances();
     const id = instanceData.id
         ? safeInstanceId(instanceData.id)
@@ -759,6 +846,10 @@ ipcMain.handle('create-instance', (event, instanceData) => {
     saveInstances(instances);
 
     return { success: true, instance: newInstance };
+    } catch (e) {
+        console.error('create-instance:', e.message);
+        return { success: false, error: e.message };
+    }
 });
 
 ipcMain.handle('delete-instance', (event, instanceId) => {
@@ -1266,8 +1357,17 @@ ipcMain.handle('delete-mod', async (event, fileName, instanceId) => {
         const base = path.basename(String(fileName || ''));
         if (!base.toLowerCase().endsWith('.jar')) return { success: false, error: 'Solo file .jar' };
         const lower = base.toLowerCase();
-        if (lower.includes('roleplayclient') || lower.includes('fabric-api') || lower === 'fabric-api.jar') {
-            return { success: false, error: 'Mod protetta' };
+        if (lower.includes('roleplayclient') || lower.includes('fabric-api')) {
+            // Protette solo sulle istanze con la versione MC delle mod bundled:
+            // su altre versioni devono poter essere rimosse (es. una fabric-api
+            // 1.20.1 installata da Modrinth, o una copia bundled incompatibile).
+            const bundledDir = path.join(__dirname, '..', 'assets', 'mods');
+            const bundledJar = path.join(bundledDir, lower.includes('roleplayclient') ? 'roleplayclient.jar' : 'fabric-api.jar');
+            const requiredMc = fs.existsSync(bundledJar) ? bundledModMcVersion(bundledJar) : null;
+            const mcVersion = instanceMcVersion(instanceId);
+            if (!mcVersion || !requiredMc || mcVersion === requiredMc) {
+                return { success: false, error: 'Mod protetta' };
+            }
         }
         const p = validatePath(path.join(modsDir, base), [modsDir]);
         if (fs.existsSync(p)) fs.rmSync(p, { force: true });
@@ -1345,17 +1445,18 @@ ipcMain.handle('modrinth-download', async (event, projectId, options) => {
     const visited = new Set();
 
     try {
-        // Rimuove le versioni vecchie della mod che stiamo installando
-        if (opts.slug) {
-            removeOlderVersions(modsDir, opts.slug);
-            installedKeys.delete(opts.slug.toLowerCase());
-        }
+        // Non considerare "già installata" la mod che stiamo aggiornando
+        if (opts.slug) installedKeys.delete(opts.slug.toLowerCase());
 
         const installed = await installProjectWithDeps(projectId, mcVersion, loader, modsDir, installedKeys, visited);
         if (!installed.length) {
             return { success: true, installed: [], mainFileName: null, dependencies: [], alreadyInstalled: true };
         }
         const main = installed.find(i => i.projectId === projectId) || installed[0];
+        // Solo ORA che il download è riuscito rimuoviamo le versioni vecchie:
+        // eliminarle prima significava perdere la mod funzionante se il
+        // download falliva a metà.
+        if (opts.slug) removeOlderVersions(modsDir, opts.slug, main.fileName);
         const dependencies = installed.filter(i => i.projectId !== projectId);
         return {
             success: true,
@@ -1433,8 +1534,11 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     console.log('All Fabric JARs found:', allFabricJars.length);
                     allFabricJars.forEach(j => console.log('  -', j));
                 } catch (fabricError) {
+                    // Un profilo Fabric senza Fabric partirebbe vanilla e senza mod,
+                    // con un finto "successo": meglio un errore chiaro all'utente.
                     console.error('Fabric installation error:', fabricError.message);
-                    console.log('Continuing without Fabric...');
+                    resolve({ success: false, error: 'Installazione Fabric fallita: ' + fabricError.message });
+                    return;
                 }
             }
             
@@ -1511,21 +1615,16 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 
                 // No valid token found
                 } else {
-                    console.log('No valid Microsoft token found, falling back to offline');
-                    console.log('Account data:', JSON.stringify({
-                        ...account,
-                        mcToken: account.mcToken ? 'present' : 'missing',
-                        mclcToken: account.mclcToken ? 'present' : 'missing',
-                        mcTokenSerialized: account.mcTokenSerialized ? 'present' : 'missing',
-                        accessToken: account.accessToken || 'missing'
-                    }));
-                    authorization = {
-                        access_token: 'offline',
-                        client_token: require('crypto').randomUUID(),
-                        uuid: generateUUID(account.name),
-                        name: account.name,
-                        user_properties: {}
-                    };
+                    // Lanciare "offline" con il nome di un account premium darebbe
+                    // un'identità finta e kick immediato dai server online: meglio
+                    // chiedere esplicitamente un nuovo login.
+                    console.log('No valid Microsoft token found, login required');
+                    resolve({
+                        success: false,
+                        requiresLogin: true,
+                        error: 'Sessione Microsoft scaduta o non valida: effettua di nuovo il login.'
+                    });
+                    return;
                 }
             } else if (account && account.name) {
                 // Offline account
@@ -1550,7 +1649,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             }
             
             // Build classpath for Fabric if installed
-            let customArgs = jvmArgs ? jvmArgs.split(' ') : [];
+            let customArgs = parseJvmArgs(jvmArgs);
             let fabricMainClass = null;
             
             if (fabricLoaderPath && fs.existsSync(fabricLoaderPath)) {
@@ -1614,7 +1713,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             }
             
             // Add JVM arguments (with AppCDS for faster restarts)
-            opts.customArgs = [...cdsLaunchArgs(instancePath), ...(jvmArgs ? jvmArgs.split(' ') : [])];
+            opts.customArgs = [...cdsLaunchArgs(instancePath), ...parseJvmArgs(jvmArgs)];
             console.log('Launch options:', JSON.stringify({ ...opts, authorization: { ...opts.authorization, access_token: '...' } }, null, 2));
             
             // If Fabric is installed, we need to launch it ourselves
@@ -1729,7 +1828,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     ...cdsLaunchArgs(instancePath),
                     `-Djava.library.path=${instancePath}`,
                     `-Dfabric.classPath=${libsDir}`,
-                    ...(jvmArgs ? jvmArgs.split(' ') : []),
+                    ...parseJvmArgs(jvmArgs),
                     '-cp', classpath,
                     'net.fabricmc.loader.launch.knot.KnotClient'
                 ];
@@ -1806,14 +1905,20 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             launcher.on('debug', (e) => console.log('Debug:', e));
             launcher.on('data', (e) => console.log('Data:', e));
             launcher.on('error', (e) => console.log('Error:', e));
-            launcher.on('close', (e) => {
-                console.log('Close:', e);
+            // Come nel ramo Fabric: la chiusura del gioco viene notificata via
+            // eventi; la Promise si risolve allo spawn, altrimenti la UI resta
+            // bloccata su "Avvio..." per tutta la sessione di gioco.
+            launcher.on('close', (code) => {
+                console.log('Close:', code);
                 if (consumeRestartSignal(instancePath)) {
                     console.log('Restart signal: riavvio del gioco in corso...');
-                    resolve({ success: true, restartRequested: true });
-                    return;
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('minecraft-restart-requested');
+                    }
                 }
-                resolve({ success: true, message: 'Minecraft avviato con successo!' });
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('minecraft-closed', { code });
+                }
             });
             launcher.on('download', (e) => console.log('Downloaded:', e));
             launcher.on('progress', (e) => {
@@ -1821,16 +1926,18 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     console.log('Progress:', e);
                 }
             });
-            
+
             // Launch Minecraft
             const mc = await launcher.launch(opts);
-            
+
             console.log('Minecraft process started:', mc ? 'yes' : 'no');
-            
+
             if (!mc) {
                 resolve({ success: false, error: 'Failed to start Minecraft process' });
+                return;
             }
-            
+            resolve({ success: true, message: 'Minecraft avviato!', started: true });
+
         } catch (error) {
             console.error('Launch error:', error);
             resolve({ success: false, error: error.message });
@@ -1838,11 +1945,17 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
     });
 });
 
-// Helper function to generate UUID from username
+// UUID offline secondo la convenzione Minecraft: UUID.nameUUIDFromBytes
+// ("OfflinePlayer:" + nome), cioè MD5 della stringa con prefisso e i bit di
+// version (3) e variant RFC-4122 impostati. Così l'identità offline coincide
+// con quella di vanilla e degli altri launcher (inventari, permessi, home).
 function generateUUID(username) {
     const crypto = require('crypto');
-    const hash = crypto.createHash('md5').update(username).digest('hex');
-    return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`;
+    const hash = crypto.createHash('md5').update('OfflinePlayer:' + username, 'utf8').digest();
+    hash[6] = (hash[6] & 0x0f) | 0x30; // version 3
+    hash[8] = (hash[8] & 0x3f) | 0x80; // variant RFC 4122
+    const hex = hash.toString('hex');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
 }
 
 // Microsoft Authentication using msmc

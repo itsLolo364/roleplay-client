@@ -286,10 +286,22 @@ function activeProfileId() {
     return config.lastProfileId || profiles[0]?.id || 'default';
 }
 
+function activeProfile() {
+    const profiles = config.profiles || [];
+    return profiles.find(p => p.id === activeProfileId()) || profiles[0] || null;
+}
+
+// Unica fonte di verità per la versione MC: la stessa espressione usata al
+// lancio. Modrinth, pagina Versioni e lancio devono sempre coincidere,
+// altrimenti si installano mod per una versione e se ne avvia un'altra.
+function resolveMcVersion(profile = activeProfile()) {
+    return profile?.mcVersion || config.settings?.mcVersionOverride || '1.21.8';
+}
+
 async function ensureDefaultProfile() {
     if (!config.profiles) config.profiles = [];
     if (!config.profiles.length) {
-        const profile = { id: 'default', name: 'Default', mcVersion: '1.21.8', ramMB: 4096, isFabric: true, iconColor: '#FCAD14' };
+        const profile = { id: 'default', name: 'Default', mcVersion: config.settings?.mcVersionOverride || '1.21.8', ramMB: 4096, isFabric: true, iconColor: '#FCAD14' };
         config.profiles.push(profile);
         config.lastProfileId = 'default';
         await window.electronAPI.createInstance(profile);
@@ -608,8 +620,8 @@ function openModrinth() {
     const old = $('modrinth-overlay');
     if (old) old.remove();
 
-    const mcVersion = config.settings?.mcVersionOverride || '1.21.8';
-    const fabricVersion = config.settings?.fabricLoaderOverride || '0.19.3';
+    const mcVersion = resolveMcVersion();
+    const fabricVersion = config.settings?.fabricLoaderOverride || 'latest';
     const state = { categories: new Set(), index: 'downloads', lastQuery: '' };
 
     const overlay = document.createElement('div');
@@ -766,15 +778,17 @@ async function installFromModrinth(hit, btn, mcVersion) {
 // ===== Versions Page =====
 function renderVersions() {
     const el = $('page-versions');
-    const currentMc = config.settings?.mcVersionOverride || '1.21.8';
-    const currentFabric = config.settings?.fabricLoaderOverride || '0.19.3';
-    
+    const profile = activeProfile();
+    const currentMc = resolveMcVersion(profile);
+    const currentFabric = config.settings?.fabricLoaderOverride || 'latest';
+
     const mcVersions = ['1.21.8', '1.21.7', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.2', '1.21.1', '1.21', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2'];
-    const fabricVersions = ['0.19.3', '0.19.2', '0.19.1', '0.19.0', '0.18.10', '0.18.9', '0.18.8'];
-    
+    // 'latest' è il default reale dell'installer: le altre voci sono override espliciti.
+    const fabricVersions = ['latest', '0.19.3', '0.19.2', '0.19.1', '0.19.0', '0.18.10', '0.18.9', '0.18.8'];
+
     el.innerHTML = `
         <div class="page-head">
-            <div><h1 class="page-title">Versione</h1><p class="page-subtitle">Seleziona la versione di Minecraft e Fabric</p></div>
+            <div><h1 class="page-title">Versione</h1><p class="page-subtitle">Versione di Minecraft e Fabric per il profilo "${esc(profile?.name || 'Default')}"</p></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
             <div>
@@ -786,29 +800,42 @@ function renderVersions() {
             <div>
                 <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Fabric Loader</h3>
                 <div style="display:flex;flex-direction:column;gap:4px;max-height:400px;overflow-y:auto;">
-                    ${fabricVersions.map(v => `<button class="card" style="cursor:pointer;text-align:left;padding:12px;${v === currentFabric ? 'border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);' : ''}" data-fab="${v}"><span style="font-size:14px;font-weight:600;">${v}</span>${v === '0.19.3' ? ' <span class="badge badge-green" style="margin-left:8px;">Latest</span>' : ''}</button>`).join('')}
+                    ${fabricVersions.map(v => `<button class="card" style="cursor:pointer;text-align:left;padding:12px;${v === currentFabric ? 'border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);' : ''}" data-fab="${v}"><span style="font-size:14px;font-weight:600;">${v === 'latest' ? 'Più recente (auto)' : v}</span></button>`).join('')}
                 </div>
             </div>
         </div>
     `;
-    
+
     el.querySelectorAll('[data-mc]').forEach(btn => {
         btn.addEventListener('click', async () => {
+            const v = btn.dataset.mc;
             if (!config.settings) config.settings = {};
-            config.settings.mcVersionOverride = btn.dataset.mc;
+            config.settings.mcVersionOverride = v;
+            // Aggiorna il profilo attivo (è la versione che verrà lanciata)...
+            const prof = activeProfile();
+            if (prof) prof.mcVersion = v;
             await window.electronAPI.saveConfig(config);
+            // ...e il record istanza, usato dal main per le mod bundled.
+            try {
+                const data = await window.electronAPI.getInstances();
+                const inst = (data.instances || []).find(i => i.id === (prof?.id || 'default'));
+                if (inst && inst.mcVersion !== v) {
+                    inst.mcVersion = v;
+                    await window.electronAPI.saveInstances(data);
+                }
+            } catch (e) { console.error('Aggiornamento istanza fallito', e); }
             renderVersions();
-            toast(`MC ${btn.dataset.mc} selezionato`, 'success');
+            toast(`MC ${v} selezionato per "${prof?.name || 'Default'}"`, 'success');
         });
     });
-    
+
     el.querySelectorAll('[data-fab]').forEach(btn => {
         btn.addEventListener('click', async () => {
             if (!config.settings) config.settings = {};
-            config.settings.fabricLoaderOverride = btn.dataset.fab;
+            config.settings.fabricLoaderOverride = btn.dataset.fab === 'latest' ? '' : btn.dataset.fab;
             await window.electronAPI.saveConfig(config);
             renderVersions();
-            toast(`Fabric ${btn.dataset.fab} selezionato`, 'success');
+            toast(`Fabric ${btn.dataset.fab === 'latest' ? 'più recente' : btn.dataset.fab} selezionato`, 'success');
         });
     });
 }
@@ -1207,8 +1234,20 @@ async function offLogin() {
     if (!/^[a-zA-Z0-9_]{3,16}$/.test(nick)) return;
     btn.disabled = true; btn.textContent = 'Accesso...'; $('login-err').textContent = '';
     try {
-        const acc = { name: nick, uuid: 'offline-' + Date.now(), type: 'offline' };
+        // Chiave stabile (non un timestamp): l'UUID reale di gioco viene comunque
+        // derivato dal nome nel main secondo la convenzione OfflinePlayer.
+        const acc = { name: nick, uuid: 'offline-' + nick.toLowerCase(), type: 'offline' };
         if (!config.accounts) config.accounts = [];
+        if (config.accounts.some(a => a.type === 'offline' && a.name.toLowerCase() === nick.toLowerCase())) {
+            config.lastUsername = nick;
+            config.lastAccountType = 'offline';
+            await window.electronAPI.saveConfig(config);
+            $('login-overlay').classList.add('hidden');
+            $('app').style.display = 'grid';
+            updateUI();
+            toast(`Bentornato, ${nick}!`, 'success');
+            return;
+        }
         config.accounts.push(acc);
         config.lastUsername = acc.name;
         config.lastAccountType = acc.type;
@@ -1271,7 +1310,7 @@ async function play() {
         const instPath = await window.electronAPI.getInstancePath(profile.id);
         const r = await window.electronAPI.launchMinecraft({
             instancePath: instPath,
-            mcVersion: profile.mcVersion || config.settings?.mcVersionOverride || '1.21.8',
+            mcVersion: resolveMcVersion(profile),
             ramMB: profile.ramMB || config.settings?.ramMB || 4096,
             javaPath: config.settings?.javaPath || '',
             jvmArgs,
@@ -1368,4 +1407,12 @@ async function init() {
     }
 }
 
-init();
+// Un errore durante l'init non deve lasciare l'utente sullo spinner infinito.
+init().catch((e) => {
+    console.error('Init fallita:', e);
+    const loading = $('loading');
+    if (loading) loading.style.display = 'none';
+    const app = $('app');
+    if (app) app.style.display = 'grid';
+    try { toast('Errore di avvio: ' + errMsg(e), 'error'); } catch (_) {}
+});
