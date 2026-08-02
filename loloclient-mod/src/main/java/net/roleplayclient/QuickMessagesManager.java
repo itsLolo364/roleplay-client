@@ -18,6 +18,10 @@ public class QuickMessagesManager {
 
     private static final Map<String, Boolean> lastDown = new HashMap<>();
     private static boolean wasScreenOpen = false;
+    // Limite chat vanilla; cooldown anti-spam tra invii da hotkey.
+    private static final int MAX_CHAT_LENGTH = 256;
+    private static final long SEND_COOLDOWN_MS = 500;
+    private static long lastSendMs = 0;
 
     private QuickMessagesManager() {
     }
@@ -27,17 +31,27 @@ public class QuickMessagesManager {
         client.setScreen(new QuickMessagesScreen(client.currentScreen));
     }
 
-    /** Invia il messaggio in chat, interpretando i comandi (testo che inizia con /). */
-    public static void send(String message) {
+    /**
+     * Invia il messaggio in chat, interpretando i comandi (testo che inizia con /).
+     * @return true se il messaggio è stato inviato (false se in cooldown o non inviabile)
+     */
+    public static boolean send(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null || message == null || message.isEmpty()) return;
+        if (client.player == null || message == null || message.isEmpty()) return false;
         var handler = client.getNetworkHandler();
-        if (handler == null) return;
+        if (handler == null) return false;
+        long now = System.currentTimeMillis();
+        if (now - lastSendMs < SEND_COOLDOWN_MS) return false;
+        lastSendMs = now;
+        // Il server rifiuta (o disconnette per) messaggi oltre il limite vanilla:
+        // tronca quelli caricati da config modificate a mano.
+        if (message.length() > MAX_CHAT_LENGTH) message = message.substring(0, MAX_CHAT_LENGTH);
         if (message.startsWith("/")) {
             handler.sendChatCommand(message.substring(1));
         } else {
             handler.sendChatMessage(message);
         }
+        return true;
     }
 
     public static List<String> list() {
@@ -76,8 +90,7 @@ public class QuickMessagesManager {
             // lo stato del tasto resta "giu'" per un tick: non deve far partire
             // l'hotkey mentre si invia un messaggio con Invio.
             if (wasScreenOpen) continue;
-            if (down && !was) {
-                send(msgs.get(i));
+            if (down && !was && send(msgs.get(i))) {
                 RoleplayClientMod.showToast("Inviato: " + msgs.get(i));
             }
         }

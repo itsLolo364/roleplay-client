@@ -33,13 +33,13 @@ public class QuickMessagesScreen extends RoleplayListScreen {
     protected void init() {
         super.init();
         int y = this.height - 44;
-        field = new TextFieldWidget(this.textRenderer, 12, y, this.width - 240, 20, Text.literal(""));
+        field = new TextFieldWidget(this.textRenderer, 12, y, Math.max(60, this.width - 240), 20, Text.literal(""));
         field.setMaxLength(200);
         field.setPlaceholder(Text.literal("Testo o comando (es. /me ...)"));
         this.addDrawableChild(field);
 
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Aggiungi"), b -> addMessage())
-                .dimensions(this.width - 220, y, 100, 20)
+                .dimensions(Math.max(12, this.width - 220), y, 100, 20)
                 .build());
     }
 
@@ -88,8 +88,9 @@ public class QuickMessagesScreen extends RoleplayListScreen {
 
     @Override
     protected void onRowSelect(int i) {
-        QuickMessagesManager.send(messages.get(i));
-        RoleplayClientMod.showToast("Inviato: " + messages.get(i));
+        if (QuickMessagesManager.send(messages.get(i))) {
+            RoleplayClientMod.showToast("Inviato: " + messages.get(i));
+        }
     }
 
     @Override
@@ -136,14 +137,16 @@ public class QuickMessagesScreen extends RoleplayListScreen {
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
         if (capturingIdx >= 0) {
-            if (button != 0 || !(mx > this.width - 104 && mx < this.width - 28)) {
-                InputUtil.Key key = InputUtil.Type.MOUSE.createFromCode(button);
-                keys.set(capturingIdx, key.getTranslationKey());
+            // Il tasto sinistro non è mai assegnabile: verrebbe premuto di continuo
+            // in gioco e invierebbe il messaggio in chat a ogni click (rischio ban).
+            if (button == 0) {
                 capturingIdx = -1;
-                RoleplayClientMod.config().save();
                 return true;
             }
+            InputUtil.Key key = InputUtil.Type.MOUSE.createFromCode(button);
+            keys.set(capturingIdx, key.getTranslationKey());
             capturingIdx = -1;
+            RoleplayClientMod.config().save();
             return true;
         }
         return super.mouseClicked(mx, my, button);

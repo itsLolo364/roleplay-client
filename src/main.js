@@ -3,6 +3,8 @@ const { safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { Readable } = require('stream');
+const { pipeline: streamPipeline } = require('stream/promises');
 
 // Disable hardware acceleration for better compatibility
 app.disableHardwareAcceleration();
@@ -10,8 +12,14 @@ app.disableHardwareAcceleration();
 let mainWindow;
 const isDev = process.env.NODE_ENV === 'development';
 
-// App data path
-const APP_DATA_PATH = path.join(os.homedir(), 'AppData', 'Roaming', 'LoloClient');
+// App data path (per piattaforma: %APPDATA% su Windows, XDG su Linux, Application Support su macOS)
+function defaultAppDataPath() {
+    const home = os.homedir();
+    if (process.platform === 'win32') return path.join(home, 'AppData', 'Roaming', 'LoloClient');
+    if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'LoloClient');
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'LoloClient');
+}
+const APP_DATA_PATH = defaultAppDataPath();
 
 function encryptSensitive(data) {
     try {
@@ -182,16 +190,51 @@ function deployModJar() {
     }
 }
 
+// Versione MC dichiarata da un jar Fabric (depends.minecraft nel fabric.mod.json),
+// es. "~1.21.8" -> "1.21.8". null se non determinabile.
+function bundledModMcVersion(jarPath) {
+    try {
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(jarPath);
+        const entry = zip.getEntry('fabric.mod.json');
+        if (!entry) return null;
+        const meta = JSON.parse(zip.readAsText(entry));
+        const dep = meta?.depends?.minecraft;
+        const constraint = Array.isArray(dep) ? dep[0] : dep;
+        if (typeof constraint !== 'string') return null;
+        const m = constraint.match(/\d+(\.\d+)+/);
+        return m ? m[0] : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Versione MC configurata per un'istanza (da instances.json), null se ignota.
+function instanceMcVersion(instanceId) {
+    try {
+        const data = getInstances();
+        const id = safeInstanceId(instanceId);
+        const inst = (data.instances || []).find(i => i.id === id);
+        return inst?.mcVersion || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Copy bundled mods (assets/mods) into the instance on first run.
 // roleplayclient.jar is always refreshed (it's the client's own mod).
 // fabric-api.jar is only copied if no fabric-api jar is already installed
 // (avoids duplicate mod ids when the user installs it via Modrinth).
+// Le mod bundled sono compilate per una specifica versione di MC: su istanze
+// con un'altra versione NON vanno copiate (Fabric si rifiuterebbe di avviarsi),
+// e una copia forzata in passato va rimossa.
 function ensureBundledMods(instanceId) {
     deployModJar();
     const modsDir = getModsDir(instanceId);
     if (!fs.existsSync(modsDir)) fs.mkdirSync(modsDir, { recursive: true });
     const bundledDir = path.join(__dirname, '..', 'assets', 'mods');
     if (!fs.existsSync(bundledDir)) return;
+    const mcVersion = instanceMcVersion(instanceId);
 
     // Rimuove i jar del vecchio client (id "loloclient" / nome "loloclientmod")
     // e le eventuali vecchie copie di "roleplayclient" già copiate: altrimenti
@@ -213,18 +256,32 @@ function ensureBundledMods(instanceId) {
     const existing = fs.readdirSync(modsDir);
     for (const f of fs.readdirSync(bundledDir)) {
         if (!f.toLowerCase().endsWith('.jar')) continue;
+        const src = path.join(bundledDir, f);
         const dest = path.join(modsDir, f);
         const isClientMod = f.toLowerCase() === 'roleplayclient.jar';
         const isFabricApi = f.toLowerCase().startsWith('fabric-api');
+
+        // Compatibilità: se conosciamo sia la versione dell'istanza sia quella
+        // richiesta dal jar bundled e non coincidono, il jar non va nell'istanza.
+        const requiredMc = bundledModMcVersion(src);
+        const incompatible = mcVersion && requiredMc && mcVersion !== requiredMc;
+        if (incompatible) {
+            if (fs.existsSync(dest)) {
+                try { fs.rmSync(dest, { force: true }); } catch (e) {}
+                console.log(`[Bundled] Rimosso ${f}: richiede MC ${requiredMc}, istanza ${mcVersion}`);
+            }
+            continue;
+        }
+
         if (isClientMod) {
-            try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+            try { fs.copyFileSync(src, dest); } catch (e) {}
         } else if (isFabricApi) {
             const hasFabricApi = existing.some(x => x.toLowerCase().startsWith('fabric-api'));
             if (!hasFabricApi) {
-                try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+                try { fs.copyFileSync(src, dest); } catch (e) {}
             }
         } else if (!fs.existsSync(dest)) {
-            try { fs.copyFileSync(path.join(bundledDir, f), dest); } catch (e) {}
+            try { fs.copyFileSync(src, dest); } catch (e) {}
         }
     }
 }
@@ -274,14 +331,58 @@ async function projectHasVersion(projectId, mcVersion, loader) {
     }
 }
 
-async function downloadFile(url, dest) {
-    const res = await fetch(url, { headers: { 'User-Agent': 'RoleplayClient/1.0.0 (Minecraft launcher)' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
+function hashFile(filePath, algo) {
+    return new Promise((resolve, reject) => {
+        const hash = require('crypto').createHash(algo);
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', reject);
+        stream.on('data', d => hash.update(d));
+        stream.on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+// Scarica in streaming su dest+'.part' e rinomina solo a verifica completata:
+// niente buffering in RAM dell'intero file, niente file troncati al posto finale,
+// timeout di inattività così un server bloccato non appende l'installazione per sempre.
+// opts.sha512 / opts.sha1 / opts.size: verifica integrità quando il manifest la fornisce.
+async function downloadFile(url, dest, opts = {}) {
+    if (!String(url).startsWith('https://')) throw new Error(`URL non sicuro rifiutato: ${url}`);
     const dir = path.dirname(dest);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(dest, buf);
-    return dest;
+    const tmp = `${dest}.part`;
+    const controller = new AbortController();
+    const idleMs = opts.idleTimeoutMs || 30000;
+    let timer = setTimeout(() => controller.abort(), idleMs);
+    try {
+        const res = await fetch(url, {
+            headers: { 'User-Agent': 'RoleplayClient/1.0.0 (Minecraft launcher)' },
+            signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = Readable.fromWeb(res.body);
+        body.on('data', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => controller.abort(), idleMs);
+        });
+        await streamPipeline(body, fs.createWriteStream(tmp));
+        if (opts.size != null) {
+            const actual = fs.statSync(tmp).size;
+            if (actual !== opts.size) throw new Error(`Size mismatch per ${url}: attesi ${opts.size} byte, ricevuti ${actual}`);
+        }
+        if (opts.sha512 || opts.sha1) {
+            const algo = opts.sha512 ? 'sha512' : 'sha1';
+            const expected = String(opts.sha512 || opts.sha1).toLowerCase();
+            const actual = await hashFile(tmp, algo);
+            if (actual !== expected) throw new Error(`${algo.toUpperCase()} mismatch per ${url}`);
+        }
+        fs.renameSync(tmp, dest);
+        return dest;
+    } catch (err) {
+        try { fs.unlinkSync(tmp); } catch (e) {}
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 // Assicura che il pack Minecraft di default (suoni, texture, font) sia
@@ -313,7 +414,7 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
     const assetsDir = path.join(gameDir, 'assets');
     const indexPath = path.join(assetsDir, 'indexes', `${id}.json`);
     if (!fs.existsSync(indexPath)) {
-        await downloadFile(assetIndex.url, indexPath);
+        await downloadFile(assetIndex.url, indexPath, { sha1: assetIndex.sha1, size: assetIndex.size });
     }
     let index;
     try { index = JSON.parse(fs.readFileSync(indexPath, 'utf8')); } catch (e) { return null; }
@@ -332,7 +433,7 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
             const dest = path.join(objectsDir, hash.substring(0, 2), hash);
             if (!fs.existsSync(dest) || fs.statSync(dest).size !== obj.size) {
                 try {
-                    await downloadFile(`https://resources.download.minecraft.net/${hash.substring(0, 2)}/${hash}`, dest);
+                    await downloadFile(`https://resources.download.minecraft.net/${hash.substring(0, 2)}/${hash}`, dest, { sha1: hash, size: obj.size });
                 } catch (e) {
                     console.error(`[Default pack] Errore su ${hash}: ${e.message}`);
                 }
@@ -399,12 +500,13 @@ function isProjectInstalled(keys, info) {
 
 // Rimuove versioni precedenti della stessa mod (match per id reale o per
 // base del file senza suffisso di versione).
-function removeOlderVersions(modsDir, slug) {
+function removeOlderVersions(modsDir, slug, keepFileName = null) {
     if (!slug || !fs.existsSync(modsDir)) return;
     const s = slug.toLowerCase();
     for (const existing of fs.readdirSync(modsDir)) {
         const lower = existing.toLowerCase();
         if (!lower.endsWith('.jar')) continue;
+        if (keepFileName && existing === keepFileName) continue;
         const p = path.join(modsDir, existing);
         const id = readModId(p);
         if (id === s) { try { fs.rmSync(p, { force: true }); } catch (e) {} continue; }
@@ -467,11 +569,83 @@ async function installProjectWithDeps(projectId, mcVersion, loader, modsDir, ins
     const dest = path.join(modsDir, file.filename);
     if (!fs.existsSync(dest)) {
         console.log(`[Modrinth] Download ${info.title}: ${file.filename}`);
-        await downloadFile(file.url, dest);
+        // Modrinth pubblica gli hash dei file: verifichiamoli.
+        await downloadFile(file.url, dest, {
+            sha512: file.hashes?.sha512,
+            sha1: file.hashes?.sha512 ? undefined : file.hashes?.sha1,
+            size: file.size
+        });
     }
     if (slug) installedKeys.add(slug);
     results.push({ fileName: file.filename, title: info.title || slug || projectId, projectId });
     return results;
+}
+
+// ===== JVM args =====
+// Tokenizza la stringa libera dei flag JVM: spazi multipli non producono entry
+// vuote (la JVM uscirebbe con "Unrecognized option") e le virgolette tengono
+// insieme i path con spazi (es. -Dfoo="C:\Program Files\x").
+function parseJvmArgs(str) {
+    if (!str || typeof str !== 'string') return [];
+    const args = [];
+    let cur = '';
+    let quote = null;
+    for (const ch of str) {
+        if (quote) {
+            if (ch === quote) quote = null;
+            else cur += ch;
+        } else if (ch === '"' || ch === "'") {
+            quote = ch;
+        } else if (/\s/.test(ch)) {
+            if (cur) { args.push(cur); cur = ''; }
+        } else {
+            cur += ch;
+        }
+    }
+    if (cur) args.push(cur);
+    return args;
+}
+
+// ===== Java detection =====
+// execFile (niente shell, niente quoting a mano) e asincrono: il probe non
+// congela il main process quando Java manca.
+function probeJava(p) {
+    return new Promise((resolve) => {
+        require('child_process').execFile(p, ['-version'], { timeout: 5000 }, (err) => resolve(!err));
+    });
+}
+
+async function findJavaAsync() {
+    const isWin = process.platform === 'win32';
+    const candidates = [
+        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', isWin ? 'java.exe' : 'java') : null,
+        'java',
+        isWin ? 'javaw' : null
+    ].filter(Boolean);
+    // Scansiona le directory di installazione standard (più recenti prima).
+    if (isWin) {
+        for (const root of ['C:/Program Files/Eclipse Adoptium', 'C:/Program Files/Java', 'C:/Program Files/Microsoft']) {
+            try {
+                const entries = fs.readdirSync(root)
+                    .filter(d => /^j(dk|re)/i.test(d))
+                    .sort()
+                    .reverse();
+                for (const entry of entries) candidates.push(path.join(root, entry, 'bin', 'java.exe'));
+            } catch (e) {}
+        }
+    } else if (process.platform === 'linux') {
+        // Percorso standard dei JDK su Debian/Ubuntu/Mint (apt) e derivate.
+        for (const root of ['/usr/lib/jvm']) {
+            try {
+                const entries = fs.readdirSync(root).sort().reverse();
+                for (const entry of entries) candidates.push(path.join(root, entry, 'bin', 'java'));
+            } catch (e) {}
+        }
+    }
+    for (const p of candidates) {
+        if (await probeJava(p)) return p;
+    }
+    return 'java';
 }
 
 // ===== Fast restart & AppCDS =====
@@ -501,12 +675,13 @@ function cdsLaunchArgs(instancePath) {
 
 function findJavaExec(preferred) {
     if (preferred && preferred.trim()) return preferred.trim();
+    const javaBin = process.platform === 'win32' ? 'java.exe' : 'java';
     const candidates = [
-        'java', 'javaw',
-        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java.exe') : null
+        'java',
+        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', javaBin) : null
     ].filter(Boolean);
     for (const p of candidates) {
-        if (p === 'java' || p === 'javaw') return p;
+        if (p === 'java') return p;
         if (fs.existsSync(p)) return p;
     }
     return 'java';
@@ -632,11 +807,23 @@ ipcMain.handle('get-instances', () => {
 });
 
 ipcMain.handle('save-instances', (event, instances) => {
-    saveInstances(instances);
-    return { success: true };
+    try {
+        if (!instances || typeof instances !== 'object' || !Array.isArray(instances.instances)) {
+            throw new Error('Formato istanze non valido');
+        }
+        saveInstances(instances);
+        return { success: true };
+    } catch (e) {
+        console.error('save-instances:', e.message);
+        return { success: false, error: e.message };
+    }
 });
 
 ipcMain.handle('create-instance', (event, instanceData) => {
+    try {
+    if (!instanceData || typeof instanceData !== 'object') {
+        throw new Error('Dati istanza mancanti');
+    }
     const instances = getInstances();
     const id = instanceData.id
         ? safeInstanceId(instanceData.id)
@@ -674,6 +861,10 @@ ipcMain.handle('create-instance', (event, instanceData) => {
     saveInstances(instances);
 
     return { success: true, instance: newInstance };
+    } catch (e) {
+        console.error('create-instance:', e.message);
+        return { success: false, error: e.message };
+    }
 });
 
 ipcMain.handle('delete-instance', (event, instanceId) => {
@@ -858,10 +1049,10 @@ ipcMain.handle('import:run', async (event, payload) => {
 ipcMain.handle('select-java-path', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Seleziona Java',
-        filters: [
-            { name: 'Java Executable', extensions: ['exe'] },
-            { name: 'All Files', extensions: ['*'] }
-        ],
+        // Su Linux/macOS il binario "java" non ha estensione: il filtro .exe vale solo su Windows.
+        filters: process.platform === 'win32'
+            ? [{ name: 'Java Executable', extensions: ['exe'] }, { name: 'All Files', extensions: ['*'] }]
+            : [{ name: 'All Files', extensions: ['*'] }],
         properties: ['openFile']
     });
 
@@ -1181,8 +1372,17 @@ ipcMain.handle('delete-mod', async (event, fileName, instanceId) => {
         const base = path.basename(String(fileName || ''));
         if (!base.toLowerCase().endsWith('.jar')) return { success: false, error: 'Solo file .jar' };
         const lower = base.toLowerCase();
-        if (lower.includes('roleplayclient') || lower.includes('fabric-api') || lower === 'fabric-api.jar') {
-            return { success: false, error: 'Mod protetta' };
+        if (lower.includes('roleplayclient') || lower.includes('fabric-api')) {
+            // Protette solo sulle istanze con la versione MC delle mod bundled:
+            // su altre versioni devono poter essere rimosse (es. una fabric-api
+            // 1.20.1 installata da Modrinth, o una copia bundled incompatibile).
+            const bundledDir = path.join(__dirname, '..', 'assets', 'mods');
+            const bundledJar = path.join(bundledDir, lower.includes('roleplayclient') ? 'roleplayclient.jar' : 'fabric-api.jar');
+            const requiredMc = fs.existsSync(bundledJar) ? bundledModMcVersion(bundledJar) : null;
+            const mcVersion = instanceMcVersion(instanceId);
+            if (!mcVersion || !requiredMc || mcVersion === requiredMc) {
+                return { success: false, error: 'Mod protetta' };
+            }
         }
         const p = validatePath(path.join(modsDir, base), [modsDir]);
         if (fs.existsSync(p)) fs.rmSync(p, { force: true });
@@ -1260,17 +1460,18 @@ ipcMain.handle('modrinth-download', async (event, projectId, options) => {
     const visited = new Set();
 
     try {
-        // Rimuove le versioni vecchie della mod che stiamo installando
-        if (opts.slug) {
-            removeOlderVersions(modsDir, opts.slug);
-            installedKeys.delete(opts.slug.toLowerCase());
-        }
+        // Non considerare "già installata" la mod che stiamo aggiornando
+        if (opts.slug) installedKeys.delete(opts.slug.toLowerCase());
 
         const installed = await installProjectWithDeps(projectId, mcVersion, loader, modsDir, installedKeys, visited);
         if (!installed.length) {
             return { success: true, installed: [], mainFileName: null, dependencies: [], alreadyInstalled: true };
         }
         const main = installed.find(i => i.projectId === projectId) || installed[0];
+        // Solo ORA che il download è riuscito rimuoviamo le versioni vecchie:
+        // eliminarle prima significava perdere la mod funzionante se il
+        // download falliva a metà.
+        if (opts.slug) removeOlderVersions(modsDir, opts.slug, main.fileName);
         const dependencies = installed.filter(i => i.projectId !== projectId);
         return {
             success: true,
@@ -1348,8 +1549,11 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     console.log('All Fabric JARs found:', allFabricJars.length);
                     allFabricJars.forEach(j => console.log('  -', j));
                 } catch (fabricError) {
+                    // Un profilo Fabric senza Fabric partirebbe vanilla e senza mod,
+                    // con un finto "successo": meglio un errore chiaro all'utente.
                     console.error('Fabric installation error:', fabricError.message);
-                    console.log('Continuing without Fabric...');
+                    resolve({ success: false, error: 'Installazione Fabric fallita: ' + fabricError.message });
+                    return;
                 }
             }
             
@@ -1426,21 +1630,16 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 
                 // No valid token found
                 } else {
-                    console.log('No valid Microsoft token found, falling back to offline');
-                    console.log('Account data:', JSON.stringify({
-                        ...account,
-                        mcToken: account.mcToken ? 'present' : 'missing',
-                        mclcToken: account.mclcToken ? 'present' : 'missing',
-                        mcTokenSerialized: account.mcTokenSerialized ? 'present' : 'missing',
-                        accessToken: account.accessToken || 'missing'
-                    }));
-                    authorization = {
-                        access_token: 'offline',
-                        client_token: require('crypto').randomUUID(),
-                        uuid: generateUUID(account.name),
-                        name: account.name,
-                        user_properties: {}
-                    };
+                    // Lanciare "offline" con il nome di un account premium darebbe
+                    // un'identità finta e kick immediato dai server online: meglio
+                    // chiedere esplicitamente un nuovo login.
+                    console.log('No valid Microsoft token found, login required');
+                    resolve({
+                        success: false,
+                        requiresLogin: true,
+                        error: 'Sessione Microsoft scaduta o non valida: effettua di nuovo il login.'
+                    });
+                    return;
                 }
             } else if (account && account.name) {
                 // Offline account
@@ -1465,7 +1664,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             }
             
             // Build classpath for Fabric if installed
-            let customArgs = jvmArgs ? jvmArgs.split(' ') : [];
+            let customArgs = parseJvmArgs(jvmArgs);
             let fabricMainClass = null;
             
             if (fabricLoaderPath && fs.existsSync(fabricLoaderPath)) {
@@ -1529,31 +1728,14 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             }
             
             // Add JVM arguments (with AppCDS for faster restarts)
-            opts.customArgs = [...cdsLaunchArgs(instancePath), ...(jvmArgs ? jvmArgs.split(' ') : [])];
+            opts.customArgs = [...cdsLaunchArgs(instancePath), ...parseJvmArgs(jvmArgs)];
             console.log('Launch options:', JSON.stringify({ ...opts, authorization: { ...opts.authorization, access_token: '...' } }, null, 2));
             
             // If Fabric is installed, we need to launch it ourselves
             if (fabricLoaderPath && fs.existsSync(fabricLoaderPath)) {
                 console.log('\n=== LAUNCHING WITH FABRIC ===');
                 
-                // Find Java
-                const findJava = () => {
-                    const paths = [
-                        'java',
-                        'javaw',
-                        'C:/Program Files/Java/jdk-23/bin/java.exe',
-                        'C:/Program Files/Eclipse Adoptium/jdk-23.0.1+9-hotspot/bin/java.exe'
-                    ];
-                    for (const p of paths) {
-                        try {
-                            require('child_process').execSync(`"${p}" -version 2>&1`, { encoding: 'utf8', timeout: 5000 });
-                            return p;
-                        } catch(e) {}
-                    }
-                    return 'java';
-                };
-                
-                const javaPathFound = javaPath || findJava();
+                const javaPathFound = javaPath || await findJavaAsync();
                 console.log('Using Java:', javaPathFound);
                 
                 // Ensure MC JAR is downloaded
@@ -1661,7 +1843,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     ...cdsLaunchArgs(instancePath),
                     `-Djava.library.path=${instancePath}`,
                     `-Dfabric.classPath=${libsDir}`,
-                    ...(jvmArgs ? jvmArgs.split(' ') : []),
+                    ...parseJvmArgs(jvmArgs),
                     '-cp', classpath,
                     'net.fabricmc.loader.launch.knot.KnotClient'
                 ];
@@ -1738,14 +1920,20 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             launcher.on('debug', (e) => console.log('Debug:', e));
             launcher.on('data', (e) => console.log('Data:', e));
             launcher.on('error', (e) => console.log('Error:', e));
-            launcher.on('close', (e) => {
-                console.log('Close:', e);
+            // Come nel ramo Fabric: la chiusura del gioco viene notificata via
+            // eventi; la Promise si risolve allo spawn, altrimenti la UI resta
+            // bloccata su "Avvio..." per tutta la sessione di gioco.
+            launcher.on('close', (code) => {
+                console.log('Close:', code);
                 if (consumeRestartSignal(instancePath)) {
                     console.log('Restart signal: riavvio del gioco in corso...');
-                    resolve({ success: true, restartRequested: true });
-                    return;
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('minecraft-restart-requested');
+                    }
                 }
-                resolve({ success: true, message: 'Minecraft avviato con successo!' });
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('minecraft-closed', { code });
+                }
             });
             launcher.on('download', (e) => console.log('Downloaded:', e));
             launcher.on('progress', (e) => {
@@ -1753,16 +1941,18 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     console.log('Progress:', e);
                 }
             });
-            
+
             // Launch Minecraft
             const mc = await launcher.launch(opts);
-            
+
             console.log('Minecraft process started:', mc ? 'yes' : 'no');
-            
+
             if (!mc) {
                 resolve({ success: false, error: 'Failed to start Minecraft process' });
+                return;
             }
-            
+            resolve({ success: true, message: 'Minecraft avviato!', started: true });
+
         } catch (error) {
             console.error('Launch error:', error);
             resolve({ success: false, error: error.message });
@@ -1770,11 +1960,17 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
     });
 });
 
-// Helper function to generate UUID from username
+// UUID offline secondo la convenzione Minecraft: UUID.nameUUIDFromBytes
+// ("OfflinePlayer:" + nome), cioè MD5 della stringa con prefisso e i bit di
+// version (3) e variant RFC-4122 impostati. Così l'identità offline coincide
+// con quella di vanilla e degli altri launcher (inventari, permessi, home).
 function generateUUID(username) {
     const crypto = require('crypto');
-    const hash = crypto.createHash('md5').update(username).digest('hex');
-    return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`;
+    const hash = crypto.createHash('md5').update('OfflinePlayer:' + username, 'utf8').digest();
+    hash[6] = (hash[6] & 0x0f) | 0x30; // version 3
+    hash[8] = (hash[8] & 0x3f) | 0x80; // variant RFC 4122
+    const hex = hash.toString('hex');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
 }
 
 // Microsoft Authentication using msmc

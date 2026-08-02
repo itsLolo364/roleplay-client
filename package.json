@@ -7,11 +7,17 @@
     "start": "electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win --x64",
+    "build:linux": "electron-builder --linux --x64",
     "pack": "electron-builder --dir",
     "package:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1",
-    "package:installer:quick": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1 -SkipMod"
+    "package:installer:quick": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1 -SkipMod",
+    "package:linux": "bash ./scripts/package-linux.sh",
+    "package:linux:quick": "bash ./scripts/package-linux.sh --skip-mod"
   },
-  "author": "LoloCass",
+  "author": {
+    "name": "Giovyx90",
+    "email": "giovannii.albanese04@gmail.com"
+  },
   "license": "MIT",
   "dependencies": {
     "adm-zip": "^0.5.18",
@@ -51,6 +57,41 @@
       "artifactName": "RoleplayClient-Setup-${version}.${ext}",
       "signAndEditExecutable": false,
       "signingHashAlgorithms": []
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Game",
+      "synopsis": "Roleplay Client - Minecraft Launcher",
+      "artifactName": "RoleplayClient-${version}-linux-${arch}.${ext}",
+      "executableName": "roleplay-client"
+    },
+    "deb": {
+      "packageName": "roleplay-client",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ]
     },
     "nsis": {
       "oneClick": false,

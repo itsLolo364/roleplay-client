@@ -27,13 +27,20 @@ import java.util.Set;
 public class FacesManager {
     private static final Map<String, Long> lastSeen = new HashMap<>();
     private static final Set<String> announced = new HashSet<>();
+    /** Dopo quanto un giocatore non più in tab è considerato offline. */
+    private static final long ONLINE_TTL_MS = 30_000;
+    /** Le entry più vecchie di così vengono eliminate (la mappa era unbounded). */
+    private static final long LAST_SEEN_PRUNE_MS = 5 * 60_000;
 
     /** Simbolo usato come badge per i volti conosciuti (la ℹ info; il variation selector U+FE0F non ha glifo). */
     public static final String BADGE = "\u2139";
 
     /** Messaggi di chat in attesa di badge, associati al volto riconosciuto dal sender. */
-    private record ChatMarker(String text, RoleplayConfig.Face face) {
+    private record ChatMarker(String text, RoleplayConfig.Face face, long ts) {
     }
+
+    /** Oltre questa età un marker non può più corrispondere alla riga in arrivo. */
+    private static final long CHAT_MARKER_TTL_MS = 10_000;
 
     /** Volto riconosciuto in una riga di chat, con la posizione (visiva) di fine nome. */
     public record ChatMatch(RoleplayConfig.Face face, String name, int end) {
@@ -44,10 +51,14 @@ public class FacesManager {
     private FacesManager() {
     }
 
+    /** Pattern precompilato: cleanCodes gira per ogni giocatore in tab a ogni tick. */
+    private static final java.util.regex.Pattern COLOR_CODES =
+            java.util.regex.Pattern.compile("[\u00a7&][0-9a-fA-Fk-orxK-ORX]");
+
     /** Rimuove i codici colore (sia "&" che "\u00a7", incluse le 16 cifre e k/l/m/n/o/r/x). */
     private static String cleanCodes(String s) {
         if (s == null) return "";
-        return s.replaceAll("[\u00a7&][0-9a-fA-Fk-orxK-ORX]", "");
+        return COLOR_CODES.matcher(s).replaceAll("");
     }
 
     private static java.util.List<RoleplayConfig.Face> faces() {
@@ -223,19 +234,33 @@ public class FacesManager {
         if (!RoleplayClientMod.config().isEnabled("volti")) return;
         RoleplayConfig.Face face = findFace(sender.getName());
         if (face == null) return;
-        pendingChat.addLast(new ChatMarker(message.getString(), face));
+        pruneStaleMarkers();
+        pendingChat.addLast(new ChatMarker(message.getString(), face, System.currentTimeMillis()));
         while (pendingChat.size() > 100) pendingChat.removeFirst();
     }
 
-    /** Consuma l'eventuale volto registrato per questo testo via sender (il badge va messo una sola volta). */
+    private static void pruneStaleMarkers() {
+        long cutoff = System.currentTimeMillis() - CHAT_MARKER_TTL_MS;
+        while (!pendingChat.isEmpty() && pendingChat.peekFirst().ts() < cutoff) {
+            pendingChat.removeFirst();
+        }
+    }
+
+    /**
+     * Consuma l'eventuale volto registrato per questo testo via sender (il badge va messo una sola volta).
+     * L'evento CHAT porta il contenuto NON decorato mentre ChatHud riceve la riga
+     * decorata ("&lt;Nome&gt; testo"): il confronto è quindi per contenimento, non
+     * per uguaglianza (che non corrispondeva praticamente mai).
+     */
     public static RoleplayConfig.Face consumeChatFace(String text) {
         if (text == null || pendingChat.isEmpty()) return null;
+        pruneStaleMarkers();
         var it = pendingChat.descendingIterator();
         while (it.hasNext()) {
             ChatMarker m = it.next();
-            if (text.equals(m.text)) {
+            if (!m.text().isEmpty() && (text.equals(m.text()) || text.contains(m.text()))) {
                 it.remove();
-                return m.face;
+                return m.face();
             }
         }
         return null;
@@ -256,7 +281,10 @@ public class FacesManager {
     }
 
     public static boolean isOnline(String name) {
-        return lastSeen.containsKey(name.toLowerCase());
+        // La sola presenza della chiave non basta: le entry restano dopo la
+        // disconnessione, quindi va confrontato il timestamp.
+        Long ts = lastSeen.get(name.toLowerCase());
+        return ts != null && System.currentTimeMillis() - ts < ONLINE_TTL_MS;
     }
 
     /** Controlla la lista giocatori: quando una faccia nota risulta presente mostra un avviso. */
@@ -265,11 +293,12 @@ public class FacesManager {
         if (client.getNetworkHandler() == null || client.world == null) return;
         if (!RoleplayClientMod.config().isEnabled("volti")) return;
 
+        long now = System.currentTimeMillis();
         Set<String> onlineNow = new HashSet<>();
         for (PlayerListEntry e : client.getNetworkHandler().getListedPlayerListEntries()) {
             String name = displayName(e);
             String lower = name.toLowerCase();
-            lastSeen.put(lower, System.currentTimeMillis());
+            lastSeen.put(lower, now);
             RoleplayConfig.Face face = findTabFace(name);
             if (face != null && !announced.contains(lower)) {
                 announced.add(lower);
@@ -278,5 +307,8 @@ public class FacesManager {
             onlineNow.add(lower);
         }
         announced.retainAll(onlineNow);
+        // Pruning: senza, su server grandi con prefissi/rank che cambiano la
+        // mappa cresce senza limite per tutta la sessione.
+        lastSeen.values().removeIf(ts -> now - ts > LAST_SEEN_PRUNE_MS);
     }
 }

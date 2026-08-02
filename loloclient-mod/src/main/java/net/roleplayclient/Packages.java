@@ -1,5 +1,6 @@
 package net.roleplayclient;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -14,6 +15,8 @@ public final class Packages {
     }
 
     private static final Map<String, Pkg> PKGS = new LinkedHashMap<>();
+    // Vista immutabile che preserva l'ordine di inserimento (Map.copyOf lo perderebbe).
+    private static final Map<String, Pkg> VIEW = Collections.unmodifiableMap(PKGS);
 
     static {
         add(new Pkg("fps", "Contatore FPS", "Mostra gli FPS in alto a sinistra dello schermo.", true, false, false));
@@ -38,7 +41,7 @@ public final class Packages {
     }
 
     public static Map<String, Pkg> all() {
-        return Map.copyOf(PKGS);
+        return VIEW;
     }
 
     public static Pkg get(String id) {

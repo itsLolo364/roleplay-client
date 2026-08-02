@@ -43,11 +43,16 @@ public final class SkinPreview {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    private static final long RETRY_BACKOFF_MS = 30_000;
+    private static final int MAX_ATTEMPTS = 3;
+
     private static volatile String loadingKey;
     private static volatile String readyKey;
     private static volatile boolean ready;
     private static volatile boolean failed;
     private static volatile boolean loading;
+    private static volatile long lastFailMs;
+    private static volatile int attempts;
     private static int texW = 1;
     private static int texH = 1;
 
@@ -78,6 +83,14 @@ public final class SkinPreview {
         String key = resolveRenderKey(client);
         if (key.equals(readyKey) && ready) return;
         if (key.equals(loadingKey) && (loading || ready)) return;
+        // draw() chiama questo metodo a ogni frame: dopo un fallimento serve un
+        // backoff (e un tetto di tentativi), altrimenti si martella il servizio
+        // con una richiesta HTTP per frame finché non torna raggiungibile.
+        if (key.equals(loadingKey) && failed) {
+            if (attempts >= MAX_ATTEMPTS) return;
+            if (System.currentTimeMillis() - lastFailMs < RETRY_BACKOFF_MS) return;
+        }
+        if (!key.equals(loadingKey)) attempts = 0;
 
         loadingKey = key;
         failed = false;
@@ -105,9 +118,11 @@ public final class SkinPreview {
     }
 
     private static void downloadAndRegister(MinecraftClient client, String key) {
+        // Se la skin dell'account non è disponibile si ripiega su Steve
+        // (quando la chiave non è già Steve).
         String[] urls = {
                 craftyUrl(key, 300, 400),
-                key.equalsIgnoreCase(MHF_STEVE) ? craftyUrl(MHF_STEVE_UUID, 300, 400) : null
+                key.equalsIgnoreCase(MHF_STEVE) ? null : craftyUrl(MHF_STEVE_UUID, 300, 400)
         };
 
         byte[] bytes = null;
@@ -121,6 +136,8 @@ public final class SkinPreview {
             if (key.equals(loadingKey)) {
                 failed = true;
                 loading = false;
+                lastFailMs = System.currentTimeMillis();
+                attempts++;
             }
             return;
         }
@@ -155,6 +172,8 @@ public final class SkinPreview {
             if (key.equals(loadingKey)) {
                 failed = true;
                 loading = false;
+                lastFailMs = System.currentTimeMillis();
+                attempts++;
             }
         }
     }
@@ -181,11 +200,12 @@ public final class SkinPreview {
 
     private static byte[] httpGet(String url) {
         try {
+            // User-Agent onesto: identificarsi come browser con Referer contraffatto
+            // per aggirare l'hotlink protection non è accettabile verso un servizio terzo.
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(12))
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("User-Agent", "RoleplayClient/" + RoleplayClientMod.MOD_ID)
                     .header("Accept", "image/webp,image/png,image/*,*/*;q=0.8")
-                    .header("Referer", "https://crafty.gg/")
                     .GET()
                     .build();
             HttpResponse<byte[]> res = HTTP.send(req, HttpResponse.BodyHandlers.ofByteArray());
