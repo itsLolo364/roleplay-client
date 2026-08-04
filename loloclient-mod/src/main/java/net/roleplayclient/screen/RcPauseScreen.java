@@ -2,9 +2,9 @@ package net.roleplayclient.screen;
 
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.advancement.AdvancementsScreen;
 import net.minecraft.client.gui.screen.StatsScreen;
-import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.text.Text;
 import net.roleplayclient.gui.GlassButton;
 import net.roleplayclient.gui.GlassUi;
@@ -191,15 +191,7 @@ public class RcPauseScreen extends Screen {
 
     private boolean disconnect() {
         if (this.client == null || this.client.world == null) return true;
-        boolean sp = this.client.isInSingleplayer();
-        Screen saving = new MessageScreen(Text.translatable("menu.savingLevel"));
-        if (sp) {
-            this.client.world.disconnect(net.minecraft.client.world.ClientWorld.QUITTING_MULTIPLAYER_TEXT);
-            this.client.disconnect(new RcTitleScreen(), false);
-        } else {
-            this.client.world.disconnect(net.minecraft.client.world.ClientWorld.QUITTING_MULTIPLAYER_TEXT);
-            this.client.disconnect(saving, false);
-        }
+        GameMenuScreen.disconnect(this.client, net.minecraft.client.world.ClientWorld.QUITTING_MULTIPLAYER_TEXT);
         return true;
     }
 

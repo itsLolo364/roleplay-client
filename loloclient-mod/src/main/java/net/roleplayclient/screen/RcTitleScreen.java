@@ -3,9 +3,11 @@ package net.roleplayclient.screen;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
 import net.minecraft.text.Text;
 import net.roleplayclient.RoleplayClientMod;
+import net.roleplayclient.RoleplayConfig;
 import net.roleplayclient.gui.GlassButton;
 import net.roleplayclient.gui.GlassUi;
 import net.roleplayclient.gui.RcShell;
@@ -89,6 +91,8 @@ public class RcTitleScreen extends Screen {
             String ver = "v" + modVersion();
             GlassUi.chip(ctx, shell.sideX + 12, shell.height - 40, shell.sideW - 24, 26, GLASS_1);
             ctx.drawText(this.textRenderer, ver + " · aggiornato", shell.sideX + 22, shell.height - 32, MUTED, false);
+
+            drawSidebarToggle(ctx, mx, my);
         }
 
         int cx = shell.contentX;
@@ -149,6 +153,15 @@ public class RcTitleScreen extends Screen {
     public boolean mouseClicked(double mx, double my, int button) {
         if (button != 0) return super.mouseClicked(mx, my, button);
 
+        if (hitSidebarToggle(mx, my)) {
+            RoleplayConfig cfg = RoleplayClientMod.config();
+            boolean on = !cfg.getBool("rctitle", "vanilla", false);
+            cfg.set("rctitle", "vanilla", on);
+            RoleplayClientMod.showToast(on ? "GUI default di Minecraft" : "GUI Roleplay Client");
+            this.client.setScreen(on ? new TitleScreen() : new RcTitleScreen());
+            return true;
+        }
+
         int nav = shell != null ? shell.hitSidebarNav(mx, my, NAV.size()) : -1;
         if (nav >= 0) return activateNav(nav);
 
@@ -200,6 +213,32 @@ public class RcTitleScreen extends Screen {
         return FabricLoader.getInstance().getModContainer("fabricloader")
                 .map(c -> c.getMetadata().getVersion().getFriendlyString())
                 .orElse("—");
+    }
+
+    private int sidebarToggleX() {
+        return shell.sideX + shell.sideW - 10 - TOGGLE_W;
+    }
+
+    private int sidebarToggleY() {
+        return shell.sideY + shell.sideH - 40 - TOGGLE_H - 12;
+    }
+
+    private void drawSidebarToggle(DrawContext ctx, int mx, int my) {
+        if (!shell.showSidebar) return;
+        boolean on = RoleplayClientMod.config().getBool("rctitle", "vanilla", false);
+        int x = shell.sideX + 10;
+        int w = shell.sideW - 20;
+        int y = sidebarToggleY();
+        boolean hover = hitSidebarToggle(mx, my);
+        GlassUi.navRow(ctx, x, y - 4, w, TOGGLE_H + 8, on, hover);
+        int ly = y + (TOGGLE_H - this.textRenderer.fontHeight) / 2 - 2;
+        ctx.drawText(this.textRenderer, "GUI Minecraft", x + 10, ly, on ? AMBER : MUTED, false);
+        GlassUi.toggle(ctx, sidebarToggleX(), y, on);
+    }
+
+    private boolean hitSidebarToggle(double mx, double my) {
+        if (!shell.showSidebar) return false;
+        return GlassUi.hitToggle(mx, my, sidebarToggleX(), sidebarToggleY());
     }
 
     @Override

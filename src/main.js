@@ -124,6 +124,48 @@ function saveConfig(config) {
     atomicWriteJson(configPath, toSave);
 }
 
+// Migrazione token account. Il name dell'app è passato da "loloclient" a
+// "roleplay-client", quindi userData (e la config con i token DPAPI) è
+// rimasta nella vecchia cartella Roaming. Se il config attuale ha account
+// senza token, li recupera dalla config legacy (stesso utente Windows).
+function migrateLegacyAccountTokens() {
+    try {
+        const configPath = path.join(APP_DATA_PATH, 'config.json');
+        if (!fs.existsSync(configPath)) return;
+        const config = getConfig();
+        const accounts = config.accounts || [];
+        if (!accounts.length) return;
+        if (accounts.some(a => a.encrypted || a.mclcToken || a.mcTokenSerialized || a.accessToken || a.mcToken)) return;
+
+        const currentName = path.basename(APP_DATA_PATH).toLowerCase();
+        const roaming = path.dirname(APP_DATA_PATH);
+        const candidates = ['loloclient', 'LoloClient', 'Roleplay Client', 'RoleplayClient'];
+        for (const name of candidates) {
+            if (name.toLowerCase() === currentName) continue;
+            const legacyPath = path.join(roaming, name, 'config.json');
+            if (!fs.existsSync(legacyPath)) continue;
+            let legacy;
+            try { legacy = JSON.parse(fs.readFileSync(legacyPath, 'utf8')); } catch (e) { continue; }
+            let migrated = false;
+            for (const la of (legacy.accounts || [])) {
+                if (!la.encrypted) continue;
+                const target = accounts.find(a => a.type === la.type && a.uuid === la.uuid && !a.encrypted);
+                if (target) {
+                    target.encrypted = la.encrypted;
+                    migrated = true;
+                    console.log('Token account migrato da', name, 'per', target.name);
+                }
+            }
+            if (migrated) {
+                saveConfig(config);
+                return;
+            }
+        }
+    } catch (e) {
+        console.error('migrateLegacyAccountTokens:', e);
+    }
+}
+
 // Instances management
 function getInstances() {
     const instancesPath = path.join(APP_DATA_PATH, 'instances.json');
@@ -1456,7 +1498,8 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             const { Client } = require('minecraft-launcher-core');
             const launcher = new Client();
             
-            const { instancePath, mcVersion, ramMB, javaPath, jvmArgs, account, isFabric } = launchData;
+            const { instancePath, mcVersion, ramMB, javaPath, jvmArgs, isFabric } = launchData;
+            let account = launchData.account;
 
             // Vincola instancePath sotto APP_DATA/instances
             const instancesRoot = path.join(APP_DATA_PATH, 'instances');
@@ -1500,6 +1543,12 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             console.log('Account type:', account?.type, 'name:', account?.name || account?.profile?.name);
             
             if (account && account.type === 'microsoft') {
+                // I token sono conservati solo nel blob 'encrypted' (strippati
+                // da getConfig per non esporli al renderer): ripristinarli.
+                if (account.encrypted && !account.mclcToken && !account.mcTokenSerialized && !account.accessToken) {
+                    const decrypted = decryptSensitive(account.encrypted);
+                    if (decrypted) account = { ...account, ...decrypted };
+                }
                 // Microsoft account - try multiple token formats
                 console.log('Account keys:', Object.keys(account).filter(k => !/token|profile|encrypted/i.test(k)));
                 
@@ -1731,9 +1780,12 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 const classpath = [mcJarPath, ...mcLibs, ...fabricJars].join(path.delimiter);
                 
                 // Build JVM args
+                // NB: -Xms resta basso (1024M) come nel ramo Vanilla/MCLC: con
+                // -Xms = -Xmx il JVM impegna subito l'intero heap (es. 8GB) e
+                // su macchine sotto carico muore con exit code 1 senza log.
                 const allJvmArgs = [
                     `-Xmx${Math.max(1024, ramMB || 4096)}M`,
-                    `-Xms${Math.max(1024, ramMB || 4096)}M`,
+                    '-Xms1024M',
                     `-Dfabric.classPath=${libsDir}`,
                     ...parseJvmArgs(jvmArgs),
                     '-cp', classpath,
@@ -1768,14 +1820,23 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
 
                 // Risolvi subito allo spawn (UX: toast "avviato" non a chiusura)
                 resolve({ success: true, message: 'Minecraft avviato!', started: true });
+
+                // Buffer dell'output del processo: se il JVM muore subito con
+                // codice non-zero (es. heap non riservabile) mostriamo la coda
+                // dell'errore reale nel toast invece del solo "codice 1".
+                const earlyErr = [];
+                const spawnTime = Date.now();
                 
                 mcProcess.stdout.on('data', (data) => {
                     const msg = data.toString();
                     console.log('Data:', msg.trim());
+                    if (Date.now() - spawnTime < 30000 && earlyErr.length < 30) earlyErr.push(msg.trim());
                 });
                 
                 mcProcess.stderr.on('data', (data) => {
-                    console.log('Error:', data.toString().trim());
+                    const msg = data.toString().trim();
+                    console.log('Error:', msg);
+                    if (Date.now() - spawnTime < 30000 && earlyErr.length < 30) earlyErr.push(msg);
                 });
                 
                 mcProcess.on('close', (code) => {
@@ -1788,7 +1849,8 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                         }
                     }
                     if (!restartPending && mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.webContents.send('minecraft-closed', { code });
+                        const msg = (code !== 0 && earlyErr.length) ? earlyErr.join('\n') : null;
+                        mainWindow.webContents.send('minecraft-closed', { code, error: msg });
                     }
                     restartPending = false;
                 });
@@ -1939,19 +2001,37 @@ ipcMain.handle('microsoft-refresh', async (event, accountData) => {
         
         const authManager = new Auth('select_account');
         
+        // I token sono conservati solo nel blob 'encrypted' (strippati da
+        // getConfig per non esporli al renderer): ripristinarli per il refresh.
+        let account = { ...accountData };
+        if (account.encrypted && !account.mclcToken) {
+            const decrypted = decryptSensitive(account.encrypted);
+            if (decrypted) account = { ...account, ...decrypted };
+        }
+        
         // Try to refresh using the saved mclc token with refresh metadata
-        if (accountData && accountData.mclcToken && accountData.mclcToken.meta?.refresh) {
+        if (account && account.mclcToken && account.mclcToken.meta?.refresh) {
             console.log('Refresh token found, attempting refresh...');
             
             try {
                 // Use fromMclcToken to restore the Minecraft token object
-                const mcToken = await fromMclcToken(authManager, accountData.mclcToken, true);
+                const mcToken = await fromMclcToken(authManager, account.mclcToken, true);
                 
                 if (mcToken && typeof mcToken.mclc === 'function') {
                     // Successfully refreshed! Get new tokens
                     const newSerialized = mcToken.getToken(true);
                     const newMclc = mcToken.mclc(true);
-                    
+
+                    // fromMclcToken non esegue il refresh se il token non era
+                    // scaduto secondo msmc (exp futuro): in quel caso i token
+                    // restano comunque validi. Se invece exp è passato, il
+                    // refresh NON è avvenuto: non va salvato come nuovo token.
+                    const exp = newMclc?.meta?.exp;
+                    if (typeof exp !== 'number' || exp <= Date.now()) {
+                        console.log('Token non rinnovato (scaduto), serve re-login');
+                        return { success: false, error: 'Token scaduto, effettua nuovamente il login' };
+                    }
+
                     console.log('Token refreshed successfully!');
                     console.log('New profile:', newSerialized.profile?.name);
                     
@@ -1985,6 +2065,7 @@ ipcMain.handle('microsoft-refresh', async (event, accountData) => {
 // App lifecycle
 app.whenReady().then(() => {
     ensureAppDataPath();
+    migrateLegacyAccountTokens();
     createWindow();
 
     app.on('activate', () => {

@@ -1,10 +1,7 @@
 package net.roleplayclient.mixin;
 
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.gui.Element;
-import net.minecraft.client.gui.Drawable;
-import net.minecraft.client.gui.Selectable;
 import net.minecraft.client.gui.screen.ChatScreen;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import net.roleplayclient.RoleplayClientMod;
@@ -19,21 +16,23 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * Ricerca chat: aggiunge un campo di ricerca sopra la riga di input della
  * chat. Scrivendoci si imposta la query che filtra il cronologico.
+ *
+ * Estende Screen per accedere a textRenderer/addDrawableChild: @Shadow in
+ * Mixin risolve solo i membri dichiarati nel target (ChatScreen), non quelli
+ * ereditati da Screen.
  */
 @Mixin(ChatScreen.class)
-public abstract class ChatScreenSearchMixin {
+public abstract class ChatScreenSearchMixin extends Screen {
 
     @Shadow
     protected TextFieldWidget chatField;
 
-    @Shadow
-    protected TextRenderer textRenderer;
-
-    @Shadow
-    protected abstract <T extends Element & Drawable & Selectable> T addDrawableChild(T child);
-
     @Unique
     private TextFieldWidget roleplayclient$searchField;
+
+    protected ChatScreenSearchMixin(Text title) {
+        super(title);
+    }
 
     @Inject(method = "init", at = @At("TAIL"))
     private void roleplayclient_addSearchField(CallbackInfo ci) {

@@ -5,6 +5,7 @@ import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.option.OptionsScreen;
+import net.roleplayclient.RoleplayClientMod;
 import net.roleplayclient.screen.RcOptionsScreen;
 import net.roleplayclient.screen.RcPauseScreen;
 import net.roleplayclient.screen.RcTitleScreen;
@@ -25,6 +26,9 @@ public class MinecraftClientMixin {
         }
         MinecraftClient client = (MinecraftClient) (Object) this;
         if (screen.getClass() == TitleScreen.class) {
+            if (RoleplayClientMod.config().getBool("rctitle", "vanilla", false)) {
+                return screen;
+            }
             boolean fade = readBool(screen, "doBackgroundFade", true);
             return new RcTitleScreen(fade);
         }
