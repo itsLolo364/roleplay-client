@@ -1,5 +1,6 @@
 package net.roleplayclient.screen;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -88,13 +89,13 @@ public class FaceEditScreen extends Screen {
     private void addServer() {
         capture();
         serverValues.add("");
-        rebuild();
+        MinecraftClient.getInstance().execute(this::rebuild);
     }
 
     private void removeServer(int idx) {
         capture();
         if (idx >= 0 && idx < serverValues.size()) serverValues.remove(idx);
-        rebuild();
+        MinecraftClient.getInstance().execute(this::rebuild);
     }
 
     private void rebuild() {
@@ -110,7 +111,7 @@ public class FaceEditScreen extends Screen {
                 .callback((cb, checked) -> {
                     capture();
                     atlantis = checked;
-                    rebuild();
+                    MinecraftClient.getInstance().execute(this::rebuild);
                 })
                 .build();
         this.addDrawableChild(modeToggle);
@@ -187,6 +188,7 @@ public class FaceEditScreen extends Screen {
         if (existing != null) {
             int idx = faces.indexOf(existing);
             if (idx >= 0) faces.set(idx, f);
+            else faces.add(f);
         } else {
             faces.add(f);
         }
@@ -213,7 +215,7 @@ public class FaceEditScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
-        if (mx > this.width - 40 && my < HEADER_H) {
+        if (mx > this.width - 48 && my < HEADER_H) {
             close();
             return true;
         }

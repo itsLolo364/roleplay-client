@@ -6,7 +6,7 @@ import net.minecraft.text.HoverEvent;
 import net.minecraft.text.OrderedText;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
-import net.roleplayclient.FacesManager;
+import net.roleplayclient.modules.FacesManager;
 import net.roleplayclient.RoleplayClientMod;
 import net.roleplayclient.RoleplayConfig;
 import org.spongepowered.asm.mixin.Mixin;
@@ -35,7 +35,8 @@ public class BetterTabTabEntryMixin {
     @Inject(method = "render(Lnet/minecraft/client/gui/DrawContext;III)V", at = @At("TAIL"))
     private void roleplayclient_tabBadge(DrawContext context, int x, int y, int width, CallbackInfo ci) {
         if (!RoleplayClientMod.config().isEnabled("volti")) return;
-        if (this.lineEntry || this.name == null) return;
+        if (this.name == null || this.lines == null) return;
+        if (this.lineEntry) return;
 
         RoleplayConfig.Face face = FacesManager.findTabFace(this.name.getString());
         if (face == null) return;

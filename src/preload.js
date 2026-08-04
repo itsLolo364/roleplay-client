@@ -14,12 +14,6 @@ const api = {
     createInstance: (data) => ipcRenderer.invoke('create-instance', data),
     deleteInstance: (id) => ipcRenderer.invoke('delete-instance', id),
 
-    // Files
-    readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
-    writeFile: (filePath, content) => ipcRenderer.invoke('write-file', filePath, content),
-    listFiles: (dirPath) => ipcRenderer.invoke('list-files', dirPath),
-    copyFile: (source, destination) => ipcRenderer.invoke('copy-file', source, destination),
-
     // Paths
     getAppDataPath: () => ipcRenderer.invoke('get-app-data-path'),
     getLauncherModsPath: () => ipcRenderer.invoke('get-launcher-mods-path'),
@@ -34,7 +28,12 @@ const api = {
 
     // Game
     launchMinecraft: (opts) => ipcRenderer.invoke('launch-minecraft', opts),
-    onLaunchProgress: (callback) => ipcRenderer.on('launch-progress', (event, p) => callback(p)),
+    cancelDownload: () => ipcRenderer.invoke('cancel-download'),
+    onLaunchProgress: (callback) => {
+        const handler = (event, p) => callback(p);
+        ipcRenderer.on('launch-progress', handler);
+        return () => ipcRenderer.removeListener('launch-progress', handler);
+    },
     onMinecraftRestartRequested: (callback) => {
         const handler = (event, data) => callback(data);
         ipcRenderer.on('minecraft-restart-requested', handler);

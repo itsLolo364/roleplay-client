@@ -26,6 +26,7 @@ public class KeybindsScreen extends Screen {
     private int assigning = -1;
     private int scroll = 0;
     private int headerH = 56;
+    private boolean needsSave = false;
 
     public KeybindsScreen(Screen parent) {
         super(Text.literal("Tasti di Roleplay Client"));
@@ -34,6 +35,7 @@ public class KeybindsScreen extends Screen {
         binds.add(RoleplayClientMod.CINEMA_KEY);
         binds.add(RoleplayClientMod.QUICK_KEY);
         binds.add(RoleplayClientMod.VOLTI_KEY);
+        binds.add(RoleplayClientMod.STOPWATCH_KEY);
     }
 
     @Override
@@ -48,6 +50,10 @@ public class KeybindsScreen extends Screen {
 
     @Override
     public void close() {
+        if (needsSave) {
+            MinecraftClient.getInstance().options.write();
+            needsSave = false;
+        }
         if (parent != null && this.client != null) this.client.setScreen(parent);
         else super.close();
     }
@@ -160,9 +166,30 @@ public class KeybindsScreen extends Screen {
     }
 
     private void assign(InputUtil.Key key) {
-        binds.get(assigning).setBoundKey(key);
+        KeyBinding original = binds.get(assigning);
+        InputUtil.Key originalKey = InputUtil.fromTranslationKey(original.getBoundKeyTranslationKey());
+        original.setBoundKey(key);
         KeyBinding.updateKeysByCode();
-        MinecraftClient.getInstance().options.write();
+
+        String conflictLabel = vanillaConflictLabel(key, original);
+        if (conflictLabel != null) {
+            RoleplayClientMod.showToast("Conflitto: " + conflictLabel + " — tasto ripristinato");
+            original.setBoundKey(originalKey);
+            KeyBinding.updateKeysByCode();
+            assigning = -1;
+            return;
+        }
+        needsSave = true;
         assigning = -1;
+    }
+
+    private static String vanillaConflictLabel(InputUtil.Key key, KeyBinding exclude) {
+        for (KeyBinding kb : MinecraftClient.getInstance().options.allKeys) {
+            if (kb == exclude) continue;
+            if (kb.getBoundKeyTranslationKey().equals(key.getTranslationKey())) {
+                return kb.getTranslationKey();
+            }
+        }
+        return null;
     }
 }

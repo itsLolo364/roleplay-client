@@ -32,6 +32,15 @@ public final class Icons {
         ACCENTS.put("zoom", new int[]{0x2D, 0xD4, 0xBF});
         ACCENTS.put("cinema", new int[]{0x8B, 0x7C, 0xF6});
         ACCENTS.put("waypoint", new int[]{0xFC, 0xAD, 0x14});
+        ACCENTS.put("rptimers", new int[]{0xFC, 0xAD, 0x14});
+        ACCENTS.put("rpstopwatch", new int[]{0x2D, 0xD4, 0xBF});
+        ACCENTS.put("cleanscreenshot", new int[]{0x24, 0x7C, 0xE2});
+        ACCENTS.put("crosshair", new int[]{0x8B, 0x7C, 0xF6});
+        ACCENTS.put("desyncalert", new int[]{0x60, 0xA5, 0xFA});
+        ACCENTS.put("chatsearch", new int[]{0x60, 0xA5, 0xFA});
+        ACCENTS.put("sessiontime", new int[]{0x2D, 0xD4, 0xBF});
+        ACCENTS.put("clipready", new int[]{0xFC, 0xAD, 0x14});
+        ACCENTS.put("watermark", new int[]{0x3D, 0x8C, 0xFF});
     }
 
     private Icons() {
@@ -154,6 +163,15 @@ public final class Icons {
             case "zoom" -> magnifier(px, py);
             case "cinema" -> play(px, py);
             case "waypoint" -> pin(px, py);
+            case "rptimers" -> timer(px, py);
+            case "rpstopwatch" -> stopwatch(px, py);
+            case "cleanscreenshot" -> camera(px, py);
+            case "crosshair" -> crosshair(px, py);
+            case "desyncalert" -> waveOff(px, py);
+            case "chatsearch" -> magnifier(px, py);
+            case "sessiontime" -> clock(px, py, false);
+            case "clipready" -> clapper(px, py);
+            case "watermark" -> award(px, py);
             default -> 0;
         };
     }
@@ -174,7 +192,7 @@ public final class Icons {
         double cov = 0;
         for (double cx : new double[]{23, 41}) {
             cov = Math.max(cov, fill(sdCircle(px, py, cx, 32, 8)));
-            cov = Math.max(cov, Math.min(cov, 1 - fill(sdCircle(px, py, cx, 32, 2.6))));
+            cov = Math.max(0, cov - fill(sdCircle(px, py, cx, 32, 2.6)));
         }
         return cov;
     }
@@ -191,6 +209,11 @@ public final class Icons {
         double cov = stroke(sdRing(px, py, 32, 31, 12.5), 3);
         cov = Math.max(cov, stroke(sdSeg(px, py, 32, 31, 32, 23), 3));
         cov = Math.max(cov, stroke(sdSeg(px, py, 32, 31, 41, 31), 3));
+        if (alarm) {
+            cov = Math.max(cov, stroke(sdSeg(px, py, 29, 16, 35, 16), 3));
+            cov = Math.max(cov, stroke(sdSeg(px, py, 24, 46, 28, 41), 3));
+            cov = Math.max(cov, stroke(sdSeg(px, py, 40, 46, 36, 41), 3));
+        }
         return cov;
     }
 
@@ -304,6 +327,58 @@ public final class Icons {
         return fill(d);
     }
 
+    private static double camera(double px, double py) {
+        double cov = fill(sdRoundRect(px, py, 32, 36, 16, 12, 5));
+        cov = Math.max(cov, fill(sdRoundRect(px, py, 32, 23, 6, 3, 2)));
+        cov = Math.min(cov, 1 - fill(sdCircle(px, py, 32, 36, 7)));
+        cov = Math.min(cov, 1 - fill(sdCircle(px, py, 32, 36, 2.2)));
+        return cov;
+    }
+
+    private static double timer(double px, double py) {
+        double cov = stroke(sdRoundRect(px, py, 32, 32, 13, 15, 3), 3);
+        cov = Math.max(cov, inTri(px, py, 23, 24, 41, 24, 32, 36) ? 1 : 0);
+        cov = Math.max(cov, inTri(px, py, 23, 40, 41, 40, 32, 28) ? 1 : 0);
+        return cov;
+    }
+
+    private static double stopwatch(double px, double py) {
+        double cov = stroke(sdRing(px, py, 32, 36, 11), 3);
+        cov = Math.max(cov, fill(sdRoundRect(px, py, 26, 21, 3, 3, 1)));
+        cov = Math.max(cov, fill(sdRoundRect(px, py, 38, 21, 3, 3, 1)));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 32, 36, 32, 29), 3));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 32, 36, 39, 40), 3));
+        return cov;
+    }
+
+    private static double waveOff(double px, double py) {
+        double cov = stroke(sdSeg(px, py, 12, 40, 20, 32), 3.5);
+        cov = Math.max(cov, stroke(sdSeg(px, py, 20, 32, 24, 28), 3.5));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 40, 24, 44, 20), 3.5));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 44, 20, 52, 12), 3.5));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 14, 14, 50, 50), 3.5));
+        return cov;
+    }
+
+    private static double clapper(double px, double py) {
+        double cov = fill(sdRoundRect(px, py, 32, 36, 14, 11, 3));
+        cov = Math.max(cov, inTri(px, py, 20, 30, 44, 30, 20, 38) ? 1 : 0);
+        cov = Math.max(cov, inTri(px, py, 20, 38, 44, 30, 44, 38) ? 1 : 0);
+        cov = Math.min(cov, 1 - stroke(sdSeg(px, py, 24, 33, 40, 31), 2));
+        cov = Math.min(cov, 1 - stroke(sdSeg(px, py, 22, 36, 38, 34), 2));
+        return cov;
+    }
+
+    private static double award(double px, double py) {
+        double cov = fill(sdCircle(px, py, 32, 28, 7));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 28, 33, 24, 42), 3));
+        cov = Math.max(cov, stroke(sdSeg(px, py, 36, 33, 40, 42), 3));
+        cov = Math.max(cov, fill(sdCircle(px, py, 24, 43, 2.6)));
+        cov = Math.max(cov, fill(sdCircle(px, py, 40, 43, 2.6)));
+        cov = Math.min(cov, 1 - fill(sdCircle(px, py, 32, 28, 2.4)));
+        return cov;
+    }
+
     // ===================== HELPERS =====================
 
     private static int[] gradient(double px, double py, int[] acc) {
@@ -350,9 +425,11 @@ public final class Icons {
     private static double sdSeg(double px, double py, double ax, double ay, double bx, double by) {
         double abx = bx - ax;
         double aby = by - ay;
+        double len2 = abx * abx + aby * aby;
+        if (len2 == 0) return Math.hypot(px - ax, py - ay);
         double apx = px - ax;
         double apy = py - ay;
-        double t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / (abx * abx + aby * aby)));
+        double t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / len2));
         return Math.hypot(apx - abx * t, apy - aby * t);
     }
 

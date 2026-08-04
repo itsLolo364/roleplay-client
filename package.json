@@ -5,7 +5,9 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "prebuild": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/clean-blockers.ps1",
     "build": "electron-builder",
+    "prebuild:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/clean-blockers.ps1",
     "build:win": "electron-builder --win --x64",
     "build:linux": "electron-builder --linux --x64",
     "pack": "electron-builder --dir",
@@ -19,9 +21,15 @@
     "email": "giovannii.albanese04@gmail.com"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LoloCass/LoloClient"
+  },
+  "publish": {
+    "provider": "github",
+    "releaseType": "release"
+  },
   "dependencies": {
-    "adm-zip": "^0.5.18",
-    "electron-store": "^8.1.0",
     "minecraft-launcher-core": "^3.16.8",
     "msmc": "^5.0.5"
   },

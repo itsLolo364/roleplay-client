@@ -3,12 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
     <title>Roleplay Client</title>
-    <script>
-        // Applica il tema salvato PRIMA del render per evitare flash
-        try { document.documentElement.dataset.theme = localStorage.getItem('rc-theme') || 'dark'; } catch (e) {}
-    </script>
+    <script src="theme.js"></script>
     <style>
         @font-face {
             font-family: 'Montserrat';
@@ -469,14 +466,6 @@
         }
         .skin-card { position: absolute; inset: 16px; display: flex; align-items: center; justify-content: center; z-index: 1; }
         .skin-img { max-height: 100%; width: auto; filter: drop-shadow(0 34px 46px rgba(0, 0, 0, 0.5)); image-rendering: pixelated; }
-
-        /* Stage indicator */
-        .stages { display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 6px; }
-        .stage { display: flex; align-items: center; gap: 7px; font-size: 12px; }
-        .stage.done { color: var(--ok); }
-        .stage.active { color: var(--on); font-weight: 600; }
-        .stage.pending { color: var(--on-variant); opacity: 0.5; }
-        .stage svg { width: 14px; height: 14px; }
         .stage-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -798,13 +787,10 @@
         <aside class="sidebar">
             <nav id="nav"></nav>
             <div class="sidebar-footer">
-                <div id="ver-info" class="ver-info clickable">
-                    <div class="ver-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                    </div>
+                <div id="ver-info" class="ver-info">
                     <div class="ver-text">
                         <span class="ver-num">v1.0.0</span>
-                        <span class="ver-status">Launcher aggiornato</span>
+                        <span class="ver-status">Roleplay Client</span>
                     </div>
                 </div>
             </div>
@@ -818,7 +804,7 @@
                         <div>
                             <p class="home-subtitle">Roleplay Client</p>
                             <h1 class="home-title lg">Bentornato, <span id="welcome-name">Player</span>.</h1>
-                            <p class="home-desc">Premi <span class="hl">Gioca</span> per verificare gli aggiornamenti e connetterti direttamente al server.</p>
+                            <p class="home-desc">Premi <span class="hl">Gioca</span> per connetterti direttamente al server.</p>
                         </div>
                         <div class="stats" id="stats"></div>
                     </div>
@@ -828,14 +814,14 @@
                                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 3a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5zM5 13a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2H5zM11 5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2zM11 13a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2h-2z"/></svg>
                                 Gioca
                             </button>
-                            <button class="btn btn-ghost btn-sm" onclick="navigate('versions')">Cambia versione</button>
-                            <button class="btn btn-ghost btn-sm" onclick="navigate('mods')">Gestisci mod</button>
+                            <button id="btn-versions" class="btn btn-ghost btn-sm">Cambia versione</button>
+                            <button id="btn-mods" class="btn btn-ghost btn-sm">Gestisci mod</button>
                         </div>
                         <div id="progress" style="display:none;">
-                            <div class="stages" id="stages"></div>
                             <div class="progress-wrap" style="margin-top:10px;">
                                 <div class="progress-bar"><div class="progress-fill" id="p-fill" style="transform:translateX(-100%)"></div></div>
                                 <span class="progress-pct" id="p-pct">0%</span>
+                                <button class="btn btn-ghost btn-sm" id="p-cancel" style="height:28px;padding:0 10px;font-size:11px;">Annulla</button>
                             </div>
                             <p class="progress-msg" id="p-msg"></p>
                         </div>
@@ -860,8 +846,8 @@
                 <p class="dialog-desc">Entra nel server roleplay</p>
             </div>
             <div class="tabs" style="margin-bottom:18px;">
-                <button class="tab active" onclick="switchTab('ms')">Microsoft</button>
-                <button class="tab" onclick="switchTab('off')">Offline</button>
+                <button id="tab-ms-btn" class="tab active">Microsoft</button>
+                <button id="tab-off-btn" class="tab">Offline</button>
             </div>
             <div id="tab-ms">
                 <p style="font-size:14px;color:var(--on-variant);line-height:1.55;">Si aprirà la finestra di login Microsoft ufficiale.</p>

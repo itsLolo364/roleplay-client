@@ -52,6 +52,8 @@ public class AlarmsScreen extends RoleplayListScreen {
             RoleplayClientMod.showToast("Formato ora non valido (usare HH:mm)");
             return;
         }
+        // Fix #11: normalizza H:mm → HH:mm (es. "9:30" → "09:30")
+        if (time.length() == 4) time = "0" + time;
         String msg = msgField.getText().trim();
         if (msg.isEmpty()) msg = "Sveglia!";
         if (selectedRowIdx >= 0 && selectedRowIdx < alarms.size()) {

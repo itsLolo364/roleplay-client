@@ -7,7 +7,7 @@ import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.text.HoverEvent;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
-import net.roleplayclient.FacesManager;
+import net.roleplayclient.modules.FacesManager;
 import net.roleplayclient.RoleplayClientMod;
 import net.roleplayclient.RoleplayConfig;
 import org.spongepowered.asm.mixin.Mixin;
@@ -30,11 +30,12 @@ public class PlayerListHudMixin {
         if (face == null) return;
 
         MinecraftClient client = MinecraftClient.getInstance();
-        boolean skin = client.isInSingleplayer()
-                || (client.getNetworkHandler() != null
-                    && client.getNetworkHandler().getConnection() != null
-                    && client.getNetworkHandler().getConnection().isEncrypted());
-        int nameX = x + (skin ? 9 : 0);
+        int skinOffset = 0;
+        if (client.getNetworkHandler() != null) {
+            PlayerListEntry self = client.getNetworkHandler().getPlayerListEntry(client.player.getUuid());
+            if (self != null && self.getSkinTextures() != null) skinOffset = 9;
+        }
+        int nameX = x + skinOffset;
         int nameW = client.textRenderer.getWidth(Text.literal(display));
         int ix = nameX + nameW + 3;
         Text badge = Text.literal(FacesManager.BADGE);
@@ -43,7 +44,7 @@ public class PlayerListHudMixin {
 
         int mx = (int) (client.mouse.getX() * client.getWindow().getScaledWidth() / client.getWindow().getWidth());
         int my = (int) (client.mouse.getY() * client.getWindow().getScaledHeight() / client.getWindow().getHeight());
-        if (mx >= ix && mx <= ix + bw && my >= y && my <= y + 8) {
+        if (mx >= ix && mx <= ix + bw && my >= y && my <= y + 16) {
             context.drawHoverEvent(client.textRenderer, Style.EMPTY.withHoverEvent(
                     new HoverEvent.ShowText(Text.literal(FacesManager.hoverText(face)))), mx, my);
         }

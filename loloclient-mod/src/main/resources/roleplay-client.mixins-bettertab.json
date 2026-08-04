@@ -2,6 +2,7 @@
     "required": false,
     "package": "net.roleplayclient.mixin",
     "compatibilityLevel": "JAVA_21",
+    "plugin": "net.roleplayclient.mixin.BetterTabMixinPlugin",
     "client": [
         "BetterTabTabEntryMixin"
     ],

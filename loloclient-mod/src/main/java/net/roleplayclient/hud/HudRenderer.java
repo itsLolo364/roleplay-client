@@ -8,11 +8,11 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
-import net.roleplayclient.ClickCounter;
 import net.roleplayclient.RoleplayClientMod;
 import net.roleplayclient.RoleplayConfig;
-import net.roleplayclient.WaypointManager;
 import net.roleplayclient.gui.GlassUi;
+import net.roleplayclient.modules.ClickCounter;
+import net.roleplayclient.modules.WaypointManager;
 
 import static net.roleplayclient.gui.GlassUi.*;
 
@@ -42,6 +42,20 @@ public class HudRenderer {
 
     private static final Deque<Toast> toasts = new ArrayDeque<>();
 
+    public static void tickFps() {
+        frames++;
+        long now = System.currentTimeMillis();
+        if (now - lastFpsTime >= 500) {
+            fps = (int) Math.round(frames * 1000.0 / (now - lastFpsTime));
+            frames = 0;
+            lastFpsTime = now;
+            // Fix #44: invalida la cache HUD nel tick, non solo durante render,
+            // così il counter non si congela quando l'HUD è nascosto.
+            hudCache.clear();
+            lastHudCacheMs = now;
+        }
+    }
+
     public static void showToast(String text) {
         toasts.addLast(new Toast(text, System.currentTimeMillis() + 3500));
         while (toasts.size() > 5) toasts.pollFirst();
@@ -50,14 +64,6 @@ public class HudRenderer {
     public static void render(DrawContext context) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.world == null) return;
-
-        frames++;
-        long now = System.currentTimeMillis();
-        if (now - lastFpsTime >= 500) {
-            fps = (int) Math.round(frames * 1000.0 / (now - lastFpsTime));
-            frames = 0;
-            lastFpsTime = now;
-        }
 
         var cfg = RoleplayClientMod.config();
         var player = client.player;
@@ -72,6 +78,8 @@ public class HudRenderer {
 
         if (cfg.isEnabled("armor")) drawArmor(context, client, cfg);
         if (cfg.isEnabled("waypoint")) drawWaypoints(context, cfg);
+
+        ModuleHudRenderer.render(context);
 
         renderToasts(context, client);
     }

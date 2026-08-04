@@ -59,6 +59,14 @@ public final class SkinPreview {
     private SkinPreview() {
     }
 
+    static {
+        try {
+            javax.imageio.ImageIO.scanForPlugins();
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] ImageIO plugin scan failed: " + e.getMessage());
+        }
+    }
+
     public static boolean isLoading() {
         return loading && !ready;
     }

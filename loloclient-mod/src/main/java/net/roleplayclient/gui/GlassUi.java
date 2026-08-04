@@ -79,6 +79,8 @@ public final class GlassUi {
     private static final Map<String, Identifier> discTex = new HashMap<>();
     private static boolean initialized = false;
 
+    private static final java.util.Set<Identifier> ALL_TEX = new java.util.LinkedHashSet<>();
+
     private static final int[] CHIP_COLORS = {
             GLASS_0, GLASS_1, GLASS_2, CARD, CARD_HOVER, CARD_SEL,
             PANEL_BOTTOM, AMBER, AMBER_2, AMBER_SOFT, AMBER_LINE,
@@ -122,11 +124,25 @@ public final class GlassUi {
         initialized = true;
     }
 
+    public static void reinit() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        TextureManager mgr = client.getTextureManager();
+        for (Identifier id : ALL_TEX) {
+            try { mgr.destroyTexture(id); } catch (Exception ignored) {}
+        }
+        ALL_TEX.clear();
+        pkgTex.clear();
+        chipTex.clear();
+        discTex.clear();
+        initialized = false;
+        init();
+    }
+
     private static void register(TextureManager mgr, Identifier id, String name, NativeImage img, boolean bilinear) {
         NativeImageBackedTexture tex = new NativeImageBackedTexture(() -> name, img);
-        // Mai mipmap su UI: causano cubi bianchi semi-trasparenti agli angoli 9-slice
         tex.setFilter(bilinear, false);
         mgr.registerTexture(id, tex);
+        ALL_TEX.add(id);
     }
 
     private static Identifier ensureChip(int color) {

@@ -240,9 +240,6 @@ public class ModMenuScreen extends Screen {
             ctx.drawText(this.textRenderer, "Il tasto si cambia da \"Tasti\".", x + 24, ty + 8, DIM, false);
         }
 
-        if (btnPrimary == null || !btnPrimary.label.equals(on ? "Disattiva" : "Attiva")) {
-            rebuildActionButtons();
-        }
         if (btnHud != null) btnHud.render(ctx, this.textRenderer, mx, my);
         if (btnConfig != null) btnConfig.render(ctx, this.textRenderer, mx, my);
         if (btnKeys != null) btnKeys.render(ctx, this.textRenderer, mx, my);
@@ -252,8 +249,6 @@ public class ModMenuScreen extends Screen {
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
         if (button != 0) return super.mouseClicked(mx, my, button);
-
-        if (search != null) search.mouseClicked(mx, my, button);
 
         if (mx > this.width - 48 && my < headerH) {
             close();
@@ -271,7 +266,8 @@ public class ModMenuScreen extends Screen {
             return true;
         }
         if (btnConfig != null && btnConfig.contains(mx, my) && selectedModule != null) {
-            this.client.setScreen(screenFor(selectedModule));
+            Screen target = screenFor(selectedModule);
+            if (target != null) this.client.setScreen(target);
             return true;
         }
         if (btnKeys != null && btnKeys.contains(mx, my)) {
@@ -314,7 +310,8 @@ public class ModMenuScreen extends Screen {
             case "rpmessages" -> new QuickMessagesScreen(this);
             case "sveglie" -> new AlarmsScreen(this);
             case "waypoint" -> new WaypointsScreen(this);
-            default -> this;
+            case "rptimers", "crosshair", "desyncalert", "clipready" -> new ModuleSettingsScreen(this, p.id());
+            default -> null;
         };
     }
 
@@ -330,8 +327,11 @@ public class ModMenuScreen extends Screen {
         if (mouseX < sideW) {
             int items = filteredModules().size();
             int maxScroll = Math.max(0, items * ITEM_H - listHeight());
-            scroll = Math.max(0, Math.min(scroll + (int) (-verticalAmount * 14), maxScroll));
-            return true;
+            int newScroll = Math.max(0, Math.min(scroll + (int) (-verticalAmount * 14), maxScroll));
+            if (newScroll != scroll) {
+                scroll = newScroll;
+                return true;
+            }
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }

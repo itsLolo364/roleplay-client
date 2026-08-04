@@ -2,24 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
-const { Readable } = require('stream');
-const { pipeline: streamPipeline } = require('stream/promises');
-
-// Disable hardware acceleration for better compatibility
-app.disableHardwareAcceleration();
 
 let mainWindow;
+let restartPending = false;
 const isDev = process.env.NODE_ENV === 'development';
-
-// App data path (per piattaforma: %APPDATA% su Windows, XDG su Linux, Application Support su macOS)
-function defaultAppDataPath() {
-    const home = os.homedir();
-    if (process.platform === 'win32') return path.join(home, 'AppData', 'Roaming', 'LoloClient');
-    if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'LoloClient');
-    return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'LoloClient');
-}
-const APP_DATA_PATH = defaultAppDataPath();
+const APP_DATA_PATH = app.getPath('userData');
 
 function encryptSensitive(data) {
     try {
@@ -66,9 +53,13 @@ function getConfig() {
                 config.accounts = config.accounts.map(acc => {
                     if (acc.encrypted) {
                         const decrypted = decryptSensitive(acc.encrypted);
-                        if (decrypted) return { ...decrypted, encrypted: undefined };
+                        if (decrypted) {
+                            const { mcTokenSerialized, mclcToken, profile, accessToken, mcToken, refresh_token, access_token, ...safe } = decrypted;
+                            return { ...safe, encrypted: acc.encrypted };
+                        }
                     }
-                    return acc;
+                    const { mcTokenSerialized, mclcToken, profile, accessToken, mcToken, refresh_token, access_token, ...safe } = acc || {};
+                    return safe;
                 });
             }
             return config;
@@ -157,11 +148,6 @@ function getModsDir(instanceId) {
     return path.join(APP_DATA_PATH, 'instances', id, 'mods');
 }
 
-function instanceMetaDir(instanceId) {
-    const id = String(instanceId || 'default').replace(/[^a-zA-Z0-9_-]/g, '');
-    return path.join(APP_DATA_PATH, 'instances', id, '.roleplay-client');
-}
-
 function safeInstanceId(instanceId) {
     const id = String(instanceId || 'default');
     if (id.includes('..') || id.includes('/') || id.includes('\\') || id.includes('\0')) {
@@ -176,9 +162,17 @@ function deployModJar() {
     if (!fs.existsSync(bundledDir)) fs.mkdirSync(bundledDir, { recursive: true });
     const buildDir = path.join(__dirname, '..', 'loloclient-mod', 'build', 'libs');
     if (!fs.existsSync(buildDir)) return;
+    const semverCmp = (a, b) => {
+        const pa = String(a).replace(/[^0-9.]/g, '').split('.').filter(Boolean).map(Number);
+        const pb = String(b).replace(/[^0-9.]/g, '').split('.').filter(Boolean).map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+        }
+        return 0;
+    };
     const candidates = fs.readdirSync(buildDir)
-        .filter(f => f === 'roleplayclient.jar' || (f.startsWith('roleplayclient-') && f.endsWith('.jar') && !f.endsWith('-sources.jar')))
-        .sort((a, b) => b.localeCompare(a));
+        .filter(f => f === 'roleplayclient.jar' || (f.startsWith('roleplayclient-') && f.endsWith('.jar') && !f.endsWith('-sources.jar') && !f.includes('-dev') && !f.includes('-all')))
+        .sort((a, b) => semverCmp(b.replace(/\.jar$/i, ''), a.replace(/\.jar$/i, '')));
     if (!candidates.length) return;
     const src = path.join(buildDir, candidates[0]);
     const dest = path.join(bundledDir, 'roleplayclient.jar');
@@ -341,16 +335,17 @@ function hashFile(filePath, algo) {
     });
 }
 
-// Scarica in streaming su dest+'.part' e rinomina solo a verifica completata:
-// niente buffering in RAM dell'intero file, niente file troncati al posto finale,
-// timeout di inattività così un server bloccato non appende l'installazione per sempre.
-// opts.sha512 / opts.sha1 / opts.size: verifica integrità quando il manifest la fornisce.
+// downloadFile cancellable: traccia AbortController per cancel-download IPC
+const _downloadControllers = new Map();
+
 async function downloadFile(url, dest, opts = {}) {
     if (!String(url).startsWith('https://')) throw new Error(`URL non sicuro rifiutato: ${url}`);
     const dir = path.dirname(dest);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const tmp = `${dest}.part`;
     const controller = new AbortController();
+    const cancelKey = dest + '|' + url;
+    _downloadControllers.set(cancelKey, controller);
     const idleMs = opts.idleTimeoutMs || 30000;
     let timer = setTimeout(() => controller.abort(), idleMs);
     try {
@@ -381,9 +376,22 @@ async function downloadFile(url, dest, opts = {}) {
         try { fs.unlinkSync(tmp); } catch (e) {}
         throw err;
     } finally {
+        _downloadControllers.delete(cancelKey);
         clearTimeout(timer);
     }
 }
+
+ipcMain.handle('cancel-download', (event, dest) => {
+    const key = dest ? dest + '|' : '';
+    const entries = [..._downloadControllers.entries()];
+    for (const [k, ctrl] of entries) {
+        if (!dest || k.startsWith(dest + '|')) {
+            ctrl.abort();
+            _downloadControllers.delete(k);
+        }
+    }
+    return { success: true, cancelled: entries.length > 0 };
+});
 
 // Assicura che il pack Minecraft di default (suoni, texture, font) sia
 // disponibile all'avvio. Prima riusa gli asset del .minecraft ufficiale se
@@ -423,6 +431,7 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
     const objectsDir = path.join(assetsDir, 'objects');
     let done = 0;
     let cursor = 0;
+    const errors = [];
     const concurrency = 8;
     const worker = async () => {
         while (true) {
@@ -435,16 +444,23 @@ async function ensureDefaultPack(gameDir, mcVersion, onProgress = () => {}) {
                 try {
                     await downloadFile(`https://resources.download.minecraft.net/${hash.substring(0, 2)}/${hash}`, dest, { sha1: hash, size: obj.size });
                 } catch (e) {
+                    errors.push({ hash, error: e.message });
                     console.error(`[Default pack] Errore su ${hash}: ${e.message}`);
                 }
             }
             done++;
-            onProgress({ msg: 'Download del pack Minecraft di default...', pct: done / objects.length });
+            const pct = done / objects.length;
+            const msg = errors.length ? `Pack: ${done}/${objects.length} (${errors.length} errori)` : 'Download del pack Minecraft di default...';
+            onProgress({ msg, pct });
         }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, objects.length) }, worker));
-    onProgress({ msg: 'Pack Minecraft di default pronto', pct: 1 });
-    return { assetsDir, assetIndexId: id };
+    if (errors.length) {
+        throw new Error(`Impossibile scaricare ${errors.length} file del pack di base (es. ${errors[0].hash})`);
+    }
+    const finalMsg = 'Pack Minecraft di default pronto';
+    onProgress({ msg: finalMsg, pct: 1, errors: [] });
+    return { assetsDir, assetIndexId: id, errors: [] };
 }
 
 // ===== Modrinth dependencies =====
@@ -648,7 +664,7 @@ async function findJavaAsync() {
     return 'java';
 }
 
-// ===== Fast restart & AppCDS =====
+// ===== Fast restart signal =====
 function roleplayClientDir(instancePath) {
     return path.join(instancePath, '.roleplay-client');
 }
@@ -657,8 +673,6 @@ function restartSignalPath(instancePath) {
     return path.join(roleplayClientDir(instancePath), 'restart.json');
 }
 
-// La mod scrive .roleplay-client/restart.json e chiude il gioco:
-// il launcher rileva il segnale e riavvia in automatico.
 function consumeRestartSignal(instancePath) {
     const p = restartSignalPath(instancePath);
     if (fs.existsSync(p)) {
@@ -666,61 +680,6 @@ function consumeRestartSignal(instancePath) {
         return true;
     }
     return false;
-}
-
-// Flag AppCDS: carica l'archivio classi precompilate -> avvio JVM più veloce
-function cdsLaunchArgs(instancePath) {
-    return ['-Xshare:auto', `-XX:SharedArchiveFile=${path.join(roleplayClientDir(instancePath), 'app.jsa')}`];
-}
-
-function findJavaExec(preferred) {
-    if (preferred && preferred.trim()) return preferred.trim();
-    const javaBin = process.platform === 'win32' ? 'java.exe' : 'java';
-    const candidates = [
-        'java',
-        process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', javaBin) : null
-    ].filter(Boolean);
-    for (const p of candidates) {
-        if (p === 'java') return p;
-        if (fs.existsSync(p)) return p;
-    }
-    return 'java';
-}
-
-// Rigenera in background l'archivio AppCDS quando la classpath cambia:
-// i riavvii successivi del gioco caricano le classi dall'archivio (molto più veloce).
-function ensureCdsArchive(instancePath, classpath, javaExec) {
-    try {
-        const dir = roleplayClientDir(instancePath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const archive = path.join(dir, 'app.jsa');
-        const tmpArchive = path.join(dir, 'app-new.jsa');
-        const hashPath = path.join(dir, 'app.jsa.md5');
-        const crypto = require('crypto');
-        const key = crypto.createHash('md5').update(classpath).digest('hex');
-        let current = '';
-        if (fs.existsSync(hashPath)) current = fs.readFileSync(hashPath, 'utf8').trim();
-        if (fs.existsSync(archive) && current === key) return; // già aggiornato
-        const { spawn } = require('child_process');
-        const child = spawn(javaExec, ['-Xshare:dump', `-XX:SharedArchiveFile=${tmpArchive}`, '-Xmx2G', '-cp', classpath], {
-            stdio: 'ignore',
-            detached: true
-        });
-        child.on('exit', () => {
-            try {
-                if (fs.existsSync(tmpArchive)) {
-                    fs.rmSync(archive, { force: true });
-                    fs.renameSync(tmpArchive, archive);
-                    fs.writeFileSync(hashPath, key);
-                    console.log('[CDS] Archivio aggiornato:', archive);
-                }
-            } catch (e) { console.log('[CDS] refresh error:', e.message); }
-        });
-        child.unref();
-        console.log('[CDS] Rigenerazione archivio in background...');
-    } catch (e) {
-        console.log('[CDS] dump error:', e.message);
-    }
 }
 
 function createWindow() {
@@ -735,11 +694,27 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             enableRemoteModule: false,
-            sandbox: false,
+            sandbox: true,
             preload: path.join(__dirname, 'preload.js')
         },
         icon: path.join(__dirname, '..', 'assets', 'icon.png'),
         show: false
+    });
+
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        const u = new URL(url);
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+            return { action: 'deny' };
+        }
+        shell.openExternal(url);
+        return { action: 'deny' };
+    });
+
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        const u = new URL(url);
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+            event.preventDefault();
+        }
     });
 
     mainWindow.loadFile(path.join(__dirname, '..', 'public', 'index.html'));
@@ -784,16 +759,38 @@ ipcMain.handle('save-config', (event, incoming) => {
             throw new Error('Config non valida');
         }
         const current = getConfig();
+        const validAccountTypes = ['microsoft', 'offline'];
         const next = {
             ...current,
             settings: { ...current.settings, ...(incoming.settings && typeof incoming.settings === 'object' ? incoming.settings : {}) },
             lastUsername: typeof incoming.lastUsername === 'string' ? incoming.lastUsername : current.lastUsername,
             lastAccountType: incoming.lastAccountType ?? current.lastAccountType,
             lastProfileId: typeof incoming.lastProfileId === 'string' ? incoming.lastProfileId : current.lastProfileId,
-            profiles: Array.isArray(incoming.profiles) ? incoming.profiles : current.profiles,
-            accounts: Array.isArray(incoming.accounts) ? incoming.accounts : current.accounts
+            profiles: Array.isArray(incoming.profiles)
+                ? incoming.profiles.map(p => ({
+                    id: typeof p.id === 'string' && p.id ? p.id : current.profiles?.find(cp => cp.id === p.id)?.id || 'default',
+                    name: typeof p.name === 'string' ? p.name : 'Default',
+                    mcVersion: typeof p.mcVersion === 'string' ? p.mcVersion : '1.21.8',
+                    ramMB: Math.max(1024, parseInt(p.ramMB) || 4096),
+                    isFabric: p.isFabric !== false,
+                    isServerProfile: !!p.isServerProfile,
+                    iconColor: typeof p.iconColor === 'string' ? p.iconColor : '#FCAD14'
+                }))
+                : current.profiles,
+            accounts: Array.isArray(incoming.accounts)
+                ? incoming.accounts.map(a => {
+                    if (!a || typeof a !== 'object') return null;
+                    const type = validAccountTypes.includes(a.type) ? a.type : 'offline';
+                    return {
+                        name: typeof a.name === 'string' ? a.name : 'Player',
+                        uuid: typeof a.uuid === 'string' ? a.uuid : '',
+                        type,
+                        encrypted: typeof a.encrypted === 'string' ? a.encrypted : undefined
+                    };
+                }).filter(Boolean)
+                : current.accounts
         };
-        // Non accettare campi arbitrari top-level
+        if (next.settings.ramMB < 1024) next.settings.ramMB = 1024;
         saveConfig(next);
         return { success: true };
     } catch (e) {
@@ -1105,6 +1102,16 @@ ipcMain.handle('get-instance-path', async (event, instanceId) => {
 });
 
 const skinCache = new Map();
+const SKIN_CACHE_MAX = 128;
+
+function skinCacheSet(key, value) {
+    if (skinCache.has(key)) skinCache.delete(key);
+    else if (skinCache.size >= SKIN_CACHE_MAX) {
+        const first = skinCache.keys().next().value;
+        skinCache.delete(first);
+    }
+    skinCache.set(key, value);
+}
 
 ipcMain.handle('get-skin', async (event, { uuid } = {}) => {
     if (!uuid) return { dataUrl: null };
@@ -1121,7 +1128,7 @@ ipcMain.handle('get-skin', async (event, { uuid } = {}) => {
         if (!res.ok) return { dataUrl: null };
         const buf = Buffer.from(await res.arrayBuffer());
         const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-        skinCache.set(cleanUuid, dataUrl);
+        skinCacheSet(cleanUuid, dataUrl);
         return { dataUrl };
     } catch (e) {
         console.error('get-skin error:', e.message);
@@ -1129,11 +1136,24 @@ ipcMain.handle('get-skin', async (event, { uuid } = {}) => {
     }
 });
 
+const ALLOWED_EXTERNAL_HOSTS = new Set([
+    'sessionserver.mojang.com',
+    'api.minecraftservices.com',
+    'api.modrinth.com',
+    'render.crafty.gg',
+    'mc-heads.net',
+    'libraries.minecraft.net',
+    'resources.download.minecraft.net'
+]);
+
 ipcMain.handle('open-external', (event, url) => {
     try {
         const u = new URL(String(url || ''));
-        if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+        if (u.protocol !== 'https:') {
             throw new Error('Schema non consentito');
+        }
+        if (!ALLOWED_EXTERNAL_HOSTS.has(u.hostname)) {
+            throw new Error('Host non consentito: ' + u.hostname);
         }
         shell.openExternal(u.toString());
     } catch (e) {
@@ -1182,73 +1202,9 @@ function validatePath(requested, allowedRoots) {
 function fsAllowedRoots() {
     return [
         path.join(APP_DATA_PATH, 'instances'),
-        path.join(APP_DATA_PATH, 'logs'),
-        path.join(__dirname, '..', 'assets', 'mods')
+        path.join(APP_DATA_PATH, 'logs')
     ];
 }
-
-ipcMain.handle('read-file', (event, filePath) => {
-    try {
-        const resolved = validatePath(filePath, fsAllowedRoots());
-        // Blocca lettura config/token
-        if (resolved.endsWith('config.json') || resolved.includes(`${path.sep}accounts`)) {
-            throw new Error('Lettura protetta');
-        }
-        if (fs.existsSync(resolved)) {
-            return fs.readFileSync(resolved, 'utf8');
-        }
-        return null;
-    } catch (e) {
-        console.error('read-file error:', e.message);
-        return null;
-    }
-});
-
-ipcMain.handle('write-file', (event, filePath, content) => {
-    try {
-        const resolved = validatePath(filePath, fsAllowedRoots());
-        if (resolved.endsWith('config.json') || resolved.endsWith('instances.json')) {
-            throw new Error('Scrittura protetta');
-        }
-        const dir = path.dirname(resolved);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        const tmp = resolved + '.tmp';
-        fs.writeFileSync(tmp, content);
-        fs.renameSync(tmp, resolved);
-        return { success: true };
-    } catch (e) {
-        console.error('write-file error:', e.message);
-        return { success: false, error: e.message };
-    }
-});
-
-ipcMain.handle('list-files', (event, dirPath) => {
-    try {
-        const resolved = validatePath(dirPath, fsAllowedRoots());
-        if (!fs.existsSync(resolved)) {
-            return [];
-        }
-        return fs.readdirSync(resolved);
-    } catch (e) {
-        console.error('list-files error:', e.message);
-        return [];
-    }
-});
-
-ipcMain.handle('copy-file', (event, source, destination) => {
-    try {
-        const allowedSrc = [...fsAllowedRoots(), path.join(__dirname, '..', 'assets')];
-        const src = validatePath(source, allowedSrc);
-        const dst = validatePath(destination, fsAllowedRoots());
-        fs.copyFileSync(src, dst);
-        return { success: true };
-    } catch (error) {
-        console.error('copy-file error:', error.message);
-        return { success: false, error: error.message };
-    }
-});
 
 // ===== Mods Management =====
 
@@ -1270,7 +1226,7 @@ function loadModIconsCache() {
 function saveModIconsCache(cache) {
     try {
         fs.mkdirSync(APP_DATA_PATH, { recursive: true });
-        fs.writeFileSync(modIconsCachePath(), JSON.stringify(cache));
+        atomicWriteJson(modIconsCachePath(), cache);
     } catch (e) {}
 }
 
@@ -1307,23 +1263,24 @@ async function attachModrinthIcons(mods) {
 
     if (toFetch.size > 0) {
         try {
+            const batchIcons = {};
             const ids = JSON.stringify([...toFetch]);
             const res = await fetchJsonRetry(`https://api.modrinth.com/v2/projects?ids=${encodeURIComponent(ids)}`, 2);
             if (Array.isArray(res)) {
                 for (const p of res) {
-                    if (p && p.slug && p.icon_url) icons[p.slug] = p.icon_url;
+                    if (p && p.slug && p.icon_url) batchIcons[p.slug] = p.icon_url;
                 }
             }
-            // Fallback per gli slug non risolti dal batch (max 8 chiamate)
             let attempts = 0;
             for (const c of toFetch) {
-                if (attempts >= 8 || icons[c]) continue;
+                if (attempts >= 8 || batchIcons[c]) continue;
                 try {
                     const p = await fetchJsonRetry(`https://api.modrinth.com/v2/project/${encodeURIComponent(c)}`, 1);
-                    if (p && p.slug && p.icon_url) icons[p.slug] = p.icon_url;
+                    if (p && p.slug && p.icon_url) batchIcons[p.slug] = p.icon_url;
                 } catch (e) {}
                 attempts++;
             }
+            Object.assign(icons, batchIcons);
             cache.ts = now;
             saveModIconsCache(cache);
         } catch (e) {
@@ -1347,9 +1304,11 @@ ipcMain.handle('list-installed-mods', async (event, instanceId) => {
     // Migrazione: le mod un tempo disattivate (.jar.disabled) vengono riattivate
     for (const f of fs.readdirSync(modsDir)) {
         if (f.toLowerCase().endsWith('.jar.disabled')) {
-            try {
-                fs.renameSync(path.join(modsDir, f), path.join(modsDir, f.slice(0, -'.disabled'.length)));
-            } catch (e) {}
+            const targetName = f.slice(0, -'.disabled'.length);
+            const targetPath = path.join(modsDir, targetName);
+            if (!fs.existsSync(targetPath)) {
+                try { fs.renameSync(path.join(modsDir, f), targetPath); } catch (e) {}
+            }
         }
     }
     const result = [];
@@ -1519,35 +1478,14 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     fabricLoaderPath = path.join(instancePath, 'libraries', 'net', 'fabricmc', 'fabric-loader', loaderVersion, `fabric-loader-${loaderVersion}.jar`);
                     
                     if (!fs.existsSync(fabricLoaderPath)) {
-                        // Try version dir
                         fabricLoaderPath = path.join(instancePath, 'versions', `fabric-loader-${loaderVersion}-${mcVersion}`, `fabric-loader-${loaderVersion}.jar`);
                     }
                     
                     console.log('Fabric loader path:', fabricLoaderPath);
                     console.log('Fabric loader exists:', fs.existsSync(fabricLoaderPath));
                     
-                    // Collect ALL Fabric library JARs for classpath
-                    const fabricLibsDir = path.join(instancePath, 'libraries', 'net', 'fabricmc');
-                    const findJars = (dir) => {
-                        const results = [];
-                        if (!fs.existsSync(dir)) return results;
-                        const items = fs.readdirSync(dir);
-                        for (const item of items) {
-                            const fullPath = path.join(dir, item);
-                            try {
-                                if (fs.statSync(fullPath).isDirectory()) {
-                                    results.push(...findJars(fullPath));
-                                } else if (item.endsWith('.jar')) {
-                                    results.push(fullPath);
-                                }
-                            } catch(e) {}
-                        }
-                        return results;
-                    };
-                    
-                    const allFabricJars = findJars(fabricLibsDir);
+                    const allFabricJars = [];
                     console.log('All Fabric JARs found:', allFabricJars.length);
-                    allFabricJars.forEach(j => console.log('  -', j));
                 } catch (fabricError) {
                     // Un profilo Fabric senza Fabric partirebbe vanilla e senza mod,
                     // con un finto "successo": meglio un errore chiaro all'utente.
@@ -1555,14 +1493,6 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     resolve({ success: false, error: 'Installazione Fabric fallita: ' + fabricError.message });
                     return;
                 }
-            }
-            
-            // Load all mods from the instance mods directory
-            const modsDir = path.join(instancePath, 'mods');
-            let mods = [];
-            if (fs.existsSync(modsDir)) {
-                mods = fs.readdirSync(modsDir).filter(f => f.endsWith('.jar')).map(modFile => path.join(modsDir, modFile));
-                console.log('Loading mods:', mods);
             }
             
             // Build authorization object
@@ -1664,43 +1594,8 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
             }
             
             // Build classpath for Fabric if installed
-            let customArgs = parseJvmArgs(jvmArgs);
-            let fabricMainClass = null;
-            
             if (fabricLoaderPath && fs.existsSync(fabricLoaderPath)) {
                 console.log('Adding Fabric to classpath...');
-                
-                // Find ALL Fabric-related JARs
-                const fabricLibsDir = path.join(instancePath, 'libraries', 'net', 'fabricmc');
-                const findJars = (dir) => {
-                    const results = [];
-                    if (!fs.existsSync(dir)) return results;
-                    const items = fs.readdirSync(dir);
-                    for (const item of items) {
-                        const fullPath = path.join(dir, item);
-                        try {
-                            if (fs.statSync(fullPath).isDirectory()) {
-                                results.push(...findJars(fullPath));
-                            } else if (item.endsWith('.jar')) {
-                                results.push(fullPath);
-                            }
-                        } catch(e) {}
-                    }
-                    return results;
-                };
-                
-                const fabricJars = findJars(fabricLibsDir);
-                console.log('Fabric JARs for classpath:', fabricJars.length);
-                
-                // Add Fabric libraries to classpath
-                // MCLC builds classpath internally, so we need to use customLaunchArgs
-                // But customLaunchArgs are added BEFORE the classpath, not after
-                // So we need a different approach - we'll modify the process arguments after launch
-                
-                fabricMainClass = 'net.fabricmc.loader.launch.knot.KnotClient';
-                
-                console.log('Fabric main class:', fabricMainClass);
-                console.log('Will need to modify classpath after MCLC builds it');
             }
             
             const opts = {
@@ -1716,8 +1611,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     min: '1024M'
                 },
                 forge: null,
-                fabric: null,
-                customArgs: customArgs
+                fabric: null
             };
             
             console.log('Launch version:', opts.version.number);
@@ -1727,8 +1621,8 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 opts.javaPath = javaPath;
             }
             
-            // Add JVM arguments (with AppCDS for faster restarts)
-            opts.customArgs = [...cdsLaunchArgs(instancePath), ...parseJvmArgs(jvmArgs)];
+            // Add JVM arguments (AppCDS rimosso: cdsLaunchArgs non esiste più)
+            opts.customArgs = [...parseJvmArgs(jvmArgs)];
             console.log('Launch options:', JSON.stringify({ ...opts, authorization: { ...opts.authorization, access_token: '...' } }, null, 2));
             
             // If Fabric is installed, we need to launch it ourselves
@@ -1838,14 +1732,12 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 
                 // Build JVM args
                 const allJvmArgs = [
-                    `-Xmx${ramMB || 4096}M`,
-                    '-Xms1024M',
-                    ...cdsLaunchArgs(instancePath),
-                    `-Djava.library.path=${instancePath}`,
+                    `-Xmx${Math.max(1024, ramMB || 4096)}M`,
+                    `-Xms${Math.max(1024, ramMB || 4096)}M`,
                     `-Dfabric.classPath=${libsDir}`,
                     ...parseJvmArgs(jvmArgs),
                     '-cp', classpath,
-                    'net.fabricmc.loader.launch.knot.KnotClient'
+                    'net.fabricmc.loader.impl.launch.knot.KnotClient'
                 ];
                 
                 // Build game args
@@ -1865,8 +1757,7 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 
                 const allArgs = [...allJvmArgs, ...gameArgs];
                 
-                console.log('Main class: net.fabricmc.loader.launch.knot.KnotClient');
-                console.log('Classpath entries:', classpath.split(path.delimiter).length);
+                console.log('Main class: net.fabricmc.loader.impl.launch.knot.KnotClient');
                 
                 // Spawn the process
                 const { spawn } = require('child_process');
@@ -1874,9 +1765,6 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     cwd: instancePath,
                     stdio: ['pipe', 'pipe', 'pipe']
                 });
-
-                // Rigenera l'archivio CDS in background se la classpath è cambiata
-                ensureCdsArchive(instancePath, classpath, javaPathFound);
 
                 // Risolvi subito allo spawn (UX: toast "avviato" non a chiusura)
                 resolve({ success: true, message: 'Minecraft avviato!', started: true });
@@ -1894,13 +1782,15 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                     console.log('Close:', code);
                     if (consumeRestartSignal(instancePath)) {
                         console.log('Restart signal: riavvio del gioco in corso...');
+                        restartPending = true;
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send('minecraft-restart-requested');
                         }
                     }
-                    if (mainWindow && !mainWindow.isDestroyed()) {
+                    if (!restartPending && mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('minecraft-closed', { code });
                     }
+                    restartPending = false;
                 });
                 
                 mcProcess.on('error', (err) => {
@@ -1927,13 +1817,15 @@ ipcMain.handle('launch-minecraft', async (event, launchData) => {
                 console.log('Close:', code);
                 if (consumeRestartSignal(instancePath)) {
                     console.log('Restart signal: riavvio del gioco in corso...');
+                    restartPending = true;
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('minecraft-restart-requested');
                     }
                 }
-                if (mainWindow && !mainWindow.isDestroyed()) {
+                if (!restartPending && mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('minecraft-closed', { code });
                 }
+                restartPending = false;
             });
             launcher.on('download', (e) => console.log('Downloaded:', e));
             launcher.on('progress', (e) => {

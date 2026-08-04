@@ -34,6 +34,15 @@ public final class Packages {
         add(new Pkg("zoom", "Zoom", "Tieni premuto il tasto (Alt) per ingrandire la visuale.", false, false, true));
         add(new Pkg("cinema", "Cinema", "Premi il tasto (ò) per nascondere l'HUD con una visuale cinematografica.", false, false, true));
         add(new Pkg("waypoint", "Waypoint", "Salva posizioni nel mondo: distanza e direzione mostrate sull'HUD.", true, true, false));
+        add(new Pkg("rptimers", "RP Timers", "Timer per scene RP e tempo di reazione dopo le azioni marcate come minaccia.", true, true, false));
+        add(new Pkg("rpstopwatch", "RP Cronometro", "Cronometro per scene RP, con tasto dedicato.", true, false, true));
+        add(new Pkg("cleanscreenshot", "Clean Screenshot", "Sostituisce F2: screenshot pulito del mondo, senza HUD e chat.", false, false, false));
+        add(new Pkg("crosshair", "Crosshair RP", "Personalizza il mirino: colore e dimensione.", false, true, false));
+        add(new Pkg("desyncalert", "Allerta desync", "Avviso quando il server non risponde oltre la soglia impostata.", true, true, false));
+        add(new Pkg("chatsearch", "Ricerca chat", "Cerca nel cronologico della chat dal campo di ricerca dedicato.", false, false, false));
+        add(new Pkg("sessiontime", "Tempo di sessione", "Mostra da quanto tempo sei connesso al server.", true, false, false));
+        add(new Pkg("clipready", "Clip Ready", "Indicatore stato Medals (clip pronta) e avviso dei momenti da registrare.", true, true, false));
+        add(new Pkg("watermark", "Action Watermark", "Watermark Roleplay Client sempre visibile sullo schermo.", true, false, false));
     }
 
     private static void add(Pkg p) {

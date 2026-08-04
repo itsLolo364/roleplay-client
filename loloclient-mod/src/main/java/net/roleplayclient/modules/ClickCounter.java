@@ -1,4 +1,4 @@
-package net.roleplayclient;
+package net.roleplayclient.modules;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -24,6 +24,20 @@ public class ClickCounter {
 
     public static int getRight() {
         return count(RIGHT);
+    }
+
+    public static boolean wasLeftPressed() {
+        while (!LEFT.isEmpty() && System.currentTimeMillis() - LEFT.peekFirst() > 1000) LEFT.pollFirst();
+        boolean pressed = !LEFT.isEmpty();
+        LEFT.clear();
+        return pressed;
+    }
+
+    public static boolean wasRightPressed() {
+        while (!RIGHT.isEmpty() && System.currentTimeMillis() - RIGHT.peekFirst() > 1000) RIGHT.pollFirst();
+        boolean pressed = !RIGHT.isEmpty();
+        RIGHT.clear();
+        return pressed;
     }
 
     private static void register(Deque<Long> d, long now) {

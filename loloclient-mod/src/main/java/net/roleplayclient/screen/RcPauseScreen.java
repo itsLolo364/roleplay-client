@@ -4,6 +4,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.advancement.AdvancementsScreen;
 import net.minecraft.client.gui.screen.StatsScreen;
+import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.text.Text;
 import net.roleplayclient.gui.GlassButton;
 import net.roleplayclient.gui.GlassUi;
@@ -30,9 +31,15 @@ public class RcPauseScreen extends Screen {
     private GlassButton btnOptions;
     private GlassButton btnMods;
     private RcShell shell;
+    private final boolean pauseOnly;
 
     public RcPauseScreen() {
+        this(false);
+    }
+
+    public RcPauseScreen(boolean pauseOnly) {
         super(Text.literal("Menu di gioco"));
+        this.pauseOnly = pauseOnly;
     }
 
     @Override
@@ -185,16 +192,19 @@ public class RcPauseScreen extends Screen {
     private boolean disconnect() {
         if (this.client == null || this.client.world == null) return true;
         boolean sp = this.client.isInSingleplayer();
-        Screen after = sp
-                ? new net.minecraft.client.gui.screen.MessageScreen(Text.translatable("menu.savingLevel"))
-                : new RcTitleScreen();
-        this.client.world.disconnect(Text.translatable("menu.returningToMenu"));
-        this.client.disconnect(after, false);
+        Screen saving = new MessageScreen(Text.translatable("menu.savingLevel"));
+        if (sp) {
+            this.client.world.disconnect(net.minecraft.client.world.ClientWorld.QUITTING_MULTIPLAYER_TEXT);
+            this.client.disconnect(new RcTitleScreen(), false);
+        } else {
+            this.client.world.disconnect(net.minecraft.client.world.ClientWorld.QUITTING_MULTIPLAYER_TEXT);
+            this.client.disconnect(saving, false);
+        }
         return true;
     }
 
     @Override
     public boolean shouldPause() {
-        return true;
+        return pauseOnly;
     }
 }

@@ -12,9 +12,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
-/**
- * Sostituisce Title / Pause / Options vanilla con le screen Liquid Glass RC.
- */
+import java.lang.reflect.Field;
+
 @Mixin(MinecraftClient.class)
 public class MinecraftClientMixin {
 
@@ -26,14 +25,15 @@ public class MinecraftClientMixin {
         }
         MinecraftClient client = (MinecraftClient) (Object) this;
         if (screen.getClass() == TitleScreen.class) {
-            return new RcTitleScreen();
+            boolean fade = readBool(screen, "doBackgroundFade", true);
+            return new RcTitleScreen(fade);
         }
         if (screen.getClass() == GameMenuScreen.class) {
-            return new RcPauseScreen();
+            boolean pauseOnly = readBool(screen, "pauseOnly", false);
+            return new RcPauseScreen(pauseOnly);
         }
         if (screen.getClass() == OptionsScreen.class) {
             Screen parent = client.currentScreen;
-            // Da sotto-menu opzioni (Video/Controls/…) torna a Pause/Title, non al sotto-menu
             if (parent == null
                     || parent instanceof OptionsScreen
                     || parent instanceof RcOptionsScreen
@@ -43,5 +43,15 @@ public class MinecraftClientMixin {
             return new RcOptionsScreen(parent, client.options);
         }
         return screen;
+    }
+
+    private static boolean readBool(Screen screen, String fieldName, boolean def) {
+        try {
+            Field f = screen.getClass().getDeclaredField(fieldName);
+            f.setAccessible(true);
+            return f.getBoolean(screen);
+        } catch (Exception e) {
+            return def;
+        }
     }
 }

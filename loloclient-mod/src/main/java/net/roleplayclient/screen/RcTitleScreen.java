@@ -32,8 +32,13 @@ public class RcTitleScreen extends Screen {
     private GlassButton btnOptions;
     private GlassButton btnQuit;
     private RcShell shell;
+    private int activeNav = 0;
 
     public RcTitleScreen() {
+        this(true);
+    }
+
+    public RcTitleScreen(boolean doBackgroundFade) {
         super(Text.literal("Roleplay Client"));
     }
 
@@ -78,7 +83,7 @@ public class RcTitleScreen extends Screen {
         }
 
         shell.drawChrome(ctx, this.textRenderer, mx, my, null, "Roleplay Client", false);
-        shell.drawSidebarNav(ctx, this.textRenderer, mx, my, NAV, 0);
+        shell.drawSidebarNav(ctx, this.textRenderer, mx, my, NAV, activeNav);
 
         if (shell.showSidebar) {
             String ver = "v" + modVersion();
@@ -97,7 +102,7 @@ public class RcTitleScreen extends Screen {
         int afterDesc = GlassUi.drawWrapped(ctx, this.textRenderer, desc, cx, cy + 36, shell.contentW, MUTED);
 
         RcShell.Stat[] stats = {
-                new RcShell.Stat("Minecraft", "1.21.8"),
+                new RcShell.Stat("Minecraft", minecraftVersion()),
                 new RcShell.Stat("Fabric", fabricVersion()),
                 new RcShell.Stat("Client", modVersion()),
                 new RcShell.Stat("Account", name != null ? name : "—")
@@ -179,6 +184,10 @@ public class RcTitleScreen extends Screen {
             }
             default -> false;
         };
+    }
+
+    private static String minecraftVersion() {
+        return net.minecraft.SharedConstants.getGameVersion().name();
     }
 
     private static String modVersion() {

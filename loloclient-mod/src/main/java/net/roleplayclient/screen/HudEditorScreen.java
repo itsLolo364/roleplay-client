@@ -113,8 +113,11 @@ public class HudEditorScreen extends Screen {
             MinecraftClient client = MinecraftClient.getInstance();
             float sw = client.getWindow().getScaledWidth();
             float sh = client.getWindow().getScaledHeight();
-            float nx = (float) ((mx - grabDX) / sw);
-            float ny = (float) ((my - grabDY) / sh);
+            // Fix #15: clamp sullo stesso spazio del box disegnato (render usa
+            // y >= 56 e x in [0, sw - BOX_W]) così posizione salvata e visiva
+            // coincidono e i moduli non "saltano" tra un frame e l'altro.
+            float nx = (float) Math.max(0, Math.min(sw - BOX_W, mx - grabDX)) / sw;
+            float ny = (float) Math.max(56, Math.min(sh - BOX_H, my - grabDY)) / sh;
             RoleplayClientMod.config().movePosition(dragging, nx, ny);
             return true;
         }

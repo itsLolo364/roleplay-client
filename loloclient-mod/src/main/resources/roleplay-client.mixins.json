@@ -5,9 +5,15 @@
     "client": [
         "GameRendererMixin",
         "ChatHudMixin",
+        "ChatHudSearchMixin",
+        "ChatScreenSearchMixin",
         "PlayerListHudMixin",
         "MinecraftClientMixin",
-        "ScreenMixin"
+        "MinecraftClientScreenshotMixin",
+        "ScreenMixin",
+        "InGameHudCrosshairMixin",
+        "ClientCommonNetworkHandlerMixin",
+        "ClientPlayNetworkHandlerMixin"
     ],
     "injectors": {
         "defaultRequire": 1

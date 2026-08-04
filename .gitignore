@@ -69,3 +69,6 @@ loloclient-mod/.gradle/
 loloclient-mod/build/
 loloclient-mod/run/
 loloclient-mod/out/
+
+#releases
+RELEASE_NOTES.md

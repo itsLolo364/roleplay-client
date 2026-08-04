@@ -6,9 +6,9 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
-import net.roleplayclient.QuickMessagesManager;
 import net.roleplayclient.RoleplayClientMod;
 import net.roleplayclient.gui.GlassUi;
+import net.roleplayclient.modules.QuickMessagesManager;
 
 import java.util.List;
 
@@ -20,6 +20,7 @@ import java.util.List;
 public class QuickMessagesScreen extends RoleplayListScreen {
     private final List<String> messages;
     private final List<String> keys;
+    private final List<Boolean> threats;
     private TextFieldWidget field;
     private int capturingIdx = -1;
 
@@ -27,6 +28,7 @@ public class QuickMessagesScreen extends RoleplayListScreen {
         super(parent, "Messaggi rapidi");
         this.messages = RoleplayClientMod.config().quickMessages();
         this.keys = RoleplayClientMod.config().quickMessageKeys();
+        this.threats = RoleplayClientMod.config().quickThreats();
     }
 
     @Override
@@ -48,6 +50,7 @@ public class QuickMessagesScreen extends RoleplayListScreen {
         if (v.isEmpty()) return;
         messages.add(v);
         keys.add("");
+        threats.add(false);
         field.setText("");
         RoleplayClientMod.config().save();
     }
@@ -87,8 +90,24 @@ public class QuickMessagesScreen extends RoleplayListScreen {
     }
 
     @Override
+    protected String rowToggleLabel(int i) {
+        return threats.get(i) ? "ON" : "OFF";
+    }
+
+    @Override
+    protected boolean rowToggleOn(int i) {
+        return threats.get(i);
+    }
+
+    @Override
+    protected void onRowToggle(int i) {
+        threats.set(i, !threats.get(i));
+        RoleplayClientMod.config().save();
+    }
+
+    @Override
     protected void onRowSelect(int i) {
-        if (QuickMessagesManager.send(messages.get(i))) {
+        if (QuickMessagesManager.send(messages.get(i), threats.get(i))) {
             RoleplayClientMod.showToast("Inviato: " + messages.get(i));
         }
     }
@@ -97,6 +116,7 @@ public class QuickMessagesScreen extends RoleplayListScreen {
     protected void onRowDelete(int i) {
         messages.remove(i);
         keys.remove(i);
+        threats.remove(i);
         if (capturingIdx == i) capturingIdx = -1;
         RoleplayClientMod.config().save();
     }
@@ -106,7 +126,7 @@ public class QuickMessagesScreen extends RoleplayListScreen {
         super.render(ctx, mx, my, delta);
         String hint = capturingIdx >= 0
                 ? "Premi il tasto da assegnare - ESC annulla - CANC/Backspace per togliere"
-                : "Clicca il pulsante \"Tasto\" per assegnare un tasto che invia il messaggio";
+                : "Pulsante \"Tasto\" per assegnare un tasto - toggle ON = il messaggio è una minaccia (tempo di reazione)";
         ctx.drawText(this.textRenderer, hint, 12, this.height - 52, GlassUi.MUTED, false);
     }
 

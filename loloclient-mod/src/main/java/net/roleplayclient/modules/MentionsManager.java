@@ -1,4 +1,5 @@
-package net.roleplayclient;
+package net.roleplayclient.modules;
+import net.roleplayclient.RoleplayClientMod;
 
 import com.mojang.authlib.GameProfile;
 import net.minecraft.client.MinecraftClient;

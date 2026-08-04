@@ -16,12 +16,15 @@
         ]
     },
     "mixins": [
-        "roleplay-client.mixins.json",
-        "roleplay-client.mixins-bettertab.json"
+        "roleplay-client.mixins.json"
     ],
     "depends": {
-        "fabricloader": ">=0.14.0",
-        "fabric-api": "*",
+        "fabricloader": ">=0.16",
+        "fabric-api": ">=0.136.1",
+        "java": ">=21",
         "minecraft": "~1.21.8"
+    },
+    "recommends": {
+        "bettertab": "*"
     }
 }

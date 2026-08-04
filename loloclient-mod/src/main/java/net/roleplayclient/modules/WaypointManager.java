@@ -1,4 +1,6 @@
-package net.roleplayclient;
+package net.roleplayclient.modules;
+import net.roleplayclient.RoleplayClientMod;
+import net.roleplayclient.RoleplayConfig;
 
 import net.minecraft.client.MinecraftClient;
 
@@ -21,7 +23,7 @@ public class WaypointManager {
     }
 
     public static List<Dist> nearest(int n) {
-        return cache.size() > n ? cache.subList(0, n) : cache;
+        return cache.size() > n ? List.copyOf(cache.subList(0, n)) : List.copyOf(cache);
     }
 
     public static void tick() {

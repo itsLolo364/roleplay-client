@@ -1,4 +1,6 @@
-package net.roleplayclient;
+package net.roleplayclient.modules;
+import net.roleplayclient.RoleplayClientMod;
+import net.roleplayclient.RoleplayConfig;
 
 import com.mojang.authlib.GameProfile;
 import net.minecraft.client.MinecraftClient;
@@ -53,9 +55,9 @@ public class FacesManager {
 
     /** Pattern precompilato: cleanCodes gira per ogni giocatore in tab a ogni tick. */
     private static final java.util.regex.Pattern COLOR_CODES =
-            java.util.regex.Pattern.compile("[\u00a7&][0-9a-fA-Fk-orxK-ORX]");
+            java.util.regex.Pattern.compile("\u00a7x[0-9a-fA-F]{12}|\u00a7[0-9a-fA-Fk-orK-ORX]");
 
-    /** Rimuove i codici colore (sia "&" che "\u00a7", incluse le 16 cifre e k/l/m/n/o/r/x). */
+    /** Rimuove i codici colore Minecraft (§). Fix #43: non tocca & (può apparire in testo normale). */
     private static String cleanCodes(String s) {
         if (s == null) return "";
         return COLOR_CODES.matcher(s).replaceAll("");

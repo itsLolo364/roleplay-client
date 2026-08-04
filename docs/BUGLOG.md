@@ -4,6 +4,46 @@ Audit completo del 2026-08-02. I bug **critici** e **high** sono stati corretti 
 `fix/critical-high-batch` (v. git log). Qui restano i **medium** e **low** non ancora
 affrontati, ordinati per priorità consigliata.
 
+## Correzioni applicate nel working tree (2026-08-03)
+
+- **9 moduli custom RP** (`loloclient-mod/`): aggiunti `rptimers`, `rpstopwatch`,
+  `cleanscreenshot`, `crosshair`, `desyncalert`, `chatsearch`, `sessiontime`,
+  `clipready`, `watermark` (manager in `net.roleplayclient.modules`, mixin in
+  `net.roleplayclient.mixin`, settings generici in `net.roleplayclient.settings` +
+  `ModuleSettingsScreen`). Messaggi rapidi: flag "Minaccia" per riga → avvia il tempo
+  di reazione (default 1.5s) quando il messaggio viene inviato. Compilato con Gradle
+  9.6.1; JAR deployata in `assets/mods/roleplayclient.jar`.
+- **Mod — rimosso modulo `rpevidence`** (RP Evidence + invio a Medals API): le API
+  Medals sono utilizzabili solo in circostanze molto rare; rimosso il manager
+  (`modules/EvidenceManager.java`), il Pkg, i settings (timeoutMs/medalsUrl), il
+  keybinding F9 (`EVIDENCE_KEY`), le chiavi lang e le voci Icon/ModMenu. Resta
+  `cleanscreenshot` per lo screenshot pulito senza HUD.
+- **Launcher/M6 — deploy JAR**: `scripts/package-installer.ps1:146` il cast
+  `[version]` era applicato all'array prodotto dalla pipeline (prima del `-join '.'`)
+  → "Impossibile convertire System.Object[] in System.Version". Spostato il `-join '.'
+  dentro le parentesi e il cast su una variabile `$v` (chiude #M6).
+- **Launcher**: rimosso `cdsLaunchArgs(instancePath)` a `src/main.js:1627` (funzione
+  cancellata → ReferenceError al lancio); pack downloader: `onProgress({msg,pct})` usato
+  fuori scope `event.sender`; CSP `script-src 'self'` in `public/index.html` con tutti gli
+  inline handler rimossi e tema pre-render spostato in `public/theme.js` (fix L4/M3).
+- **Mod — compilazione (19 errori, Yarn 1.21.8+build.1)**:
+  - `RoleplayClientMod`: il resource-reload listener usava API inesistenti
+    (`IdentifiedResourceReloadListener`, `net.fabricmc.fabric.api.client.resource`,
+    `ProfiledDuration`). Riscritto con `IdentifiableResourceReloadListener` +
+    `ResourceManagerHelper` (package `fabric.api.resource`) e firma
+    `reload(Synchronizer, ResourceManager, Executor, Executor)` → GlassUi.reinit al reload
+    (chiude #42).
+  - `QuickMessagesManager`/`KeybindsScreen`: `options.getAllKeys()` → `options.allKeys`;
+    `KeyBinding.getBoundKey()` → `getBoundKeyTranslationKey()` vs `key.getTranslationKey()`
+    (fix #24/#25).
+  - `PlayerListHudMixin`: `PlayerListEntry.getSkin()` → `getSkinTextures()`.
+  - `GlassUi`: rimosso `RenderSystem.enableDepthTest()` (non esiste in questa Yarn; il depth
+    test è gestito dai RenderPipelines).
+  - `RcPauseScreen`: `world.disconnect()` → `world.disconnect(ClientWorld.QUITTING_MULTIPLAYER_TEXT)`.
+  - `RcTitleScreen`: `GameVersion.getName()` → `name()`.
+- **Build**: `build.gradle` ripristinato a Loom `1.17.17` (`1.10.0` non esiste → 404 su
+  maven.fabricmc.net). Compilato con Gradle 9.6.1; JAR deployata in `assets/mods/roleplayclient.jar`.
+
 ## Launcher — Medium
 
 - **M1 — Path `%APPDATA%` hardcoded** (`src/main.js:14`, `lib/importer/detect.js`): su
@@ -90,11 +130,11 @@ affrontati, ordinati per priorità consigliata.
   `mouseClicked` itera i children → focus stale. Differire con `client.execute`.
   Inoltre `faces.indexOf(existing)` può sovrascrivere il volto sbagliato e un salvataggio
   con `idx < 0` viene scartato in silenzio.
-- **#24 — `QuickMessagesManager`** polla i tasti raw senza il sistema keybinding di MC:
-  niente conflict detection (bindare `W` invia camminando), fire con overlay di altre
-  mod, `lastDown` mai ripulita. Migrare a `KeyBindingHelper`.
-- **#25 — `KeybindsScreen`** scrive le options a ogni tasto e non segnala conflitti con
-  bind vanilla/moddati.
+- **#24 — (risolto)** `QuickMessagesManager` ora fa conflict detection via
+  `client.options.allKeys` + confronto translation-key: un tasto già legato (es. W) non
+  invia; `lastDown` viene ripulita per i tasti non più assegnati.
+- **#25 — (risolto)** `KeybindsScreen` segnala i conflitti con bind vanilla/moddati e
+  ripristina il tasto precedente.
 
 ## Mod — Low
 
@@ -115,7 +155,8 @@ affrontati, ordinati per priorità consigliata.
 - **#39** `wasPressed()` drenato con `if` invece di `while`.
 - **#40** `CinemaManager.toggle()` senza null-guard e clobbera lo stato F1 dell'utente.
 - **#41** `positions()` espone la mappa mutabile live; chiavi sconosciute persistono.
-- **#42** `GlassUi`: nessun re-init dopo resource reload; ~40 texture mai liberate.
+- **#42 — (risolto)** `GlassUi` re-init dopo resource reload tramite
+  `IdentifiableResourceReloadListener` registrato con `ResourceManagerHelper`.
 - **#43** `cleanCodes` mangia "&x" anche in testo legittimo (es. "AT&T") nel matcher.
 - **#44** FPS counter congelato quando l'HUD è nascosto (incluso cinema mode).
 
@@ -124,9 +165,9 @@ affrontati, ordinati per priorità consigliata.
 - `fabric.mod.json` dichiara `"fabricloader": ">=0.14.0"` ma si compila con 0.19.3:
   alzare il floor (≥0.16). Manca `"java": ">=21"` nei depends. `"fabric-api": "*"`
   senza floor malgrado l'uso di message-api-v1/HudRenderCallback.
-- `build.gradle`: versione Loom `1.17.17` sospetta (verificare che esista; le release
-  note per MC 1.21.8 sono nella serie 1.10/1.11). Nessun gradle wrapper nel repo →
-  build non riproducibile (aggiungere `gradlew`).
+- `build.gradle`: Loom `1.17.17` verificato (esiste, richiede Gradle ≥9.5; compila con
+  9.6.1). `1.10.0` non esiste (404). Nessun gradle wrapper nel repo → build non
+  riproducibile (aggiungere `gradlew`).
 - `libs/bettertab.jar` vendorizzato con licenza ignota e integrazione non dichiarata
   in `fabric.mod.json`.
 - TwelveMonkeys WebP via jar-in-jar: la discovery `ServiceLoader` sotto Knot è

@@ -1,6 +1,7 @@
 package net.roleplayclient;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.Gson;
@@ -60,8 +61,10 @@ public class RoleplayConfig {
     private final List<Face> faces = new ArrayList<>();
     private final List<String> quickMessages = new ArrayList<>();
     private final List<String> quickKeys = new ArrayList<>();
+    private final List<Boolean> quickThreats = new ArrayList<>();
     private final List<Waypoint> waypoints = new ArrayList<>();
     private final List<Alarm> alarms = new ArrayList<>();
+    private JsonObject settings = new JsonObject();
 
     public RoleplayConfig() {
         for (String m : Packages.all().keySet()) modules.put(m, true);
@@ -73,6 +76,13 @@ public class RoleplayConfig {
         positions.put("oramondo", new HudPos(0.005f, 0.13f));
         positions.put("armor", new HudPos(0.005f, 0.16f));
         positions.put("waypoint", new HudPos(0.005f, 0.19f));
+        positions.put("rptimers", new HudPos(0.005f, 0.22f));
+        positions.put("rpstopwatch", new HudPos(0.005f, 0.25f));
+        positions.put("sessiontime", new HudPos(0.005f, 0.28f));
+        positions.put("clipready", new HudPos(0.005f, 0.31f));
+        positions.put("desyncalert", new HudPos(0.005f, 0.34f));
+        positions.put("watermark", new HudPos(0.5f, 0.94f));
+        positions.put("reaction", new HudPos(0.5f, 0.62f));
     }
 
     public static Path path() {
@@ -200,6 +210,28 @@ public class RoleplayConfig {
         while (c.quickKeys.size() < c.quickMessages.size()) c.quickKeys.add("");
         while (c.quickKeys.size() > c.quickMessages.size()) c.quickKeys.remove(c.quickKeys.size() - 1);
         try {
+            JsonObject st = obj.getAsJsonObject("settings");
+            if (st != null) c.settings = st;
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione settings ignorata: " + e.getMessage());
+        }
+        try {
+            JsonArray qt = obj.getAsJsonArray("quickThreats");
+            if (qt != null) {
+                for (var el : qt) {
+                    try {
+                        c.quickThreats.add(el.getAsBoolean());
+                    } catch (Exception ignored) {
+                        c.quickThreats.add(false);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[RoleplayClient] Config: sezione quickThreats ignorata: " + e.getMessage());
+        }
+        while (c.quickThreats.size() < c.quickMessages.size()) c.quickThreats.add(false);
+        while (c.quickThreats.size() > c.quickMessages.size()) c.quickThreats.remove(c.quickThreats.size() - 1);
+        try {
             JsonArray wp = obj.getAsJsonArray("waypoints");
             if (wp != null) {
                 for (var el : wp) {
@@ -253,7 +285,7 @@ public class RoleplayConfig {
     }
 
     public Map<String, HudPos> positions() {
-        return positions;
+        return Collections.unmodifiableMap(positions);
     }
 
     /** Sposta un modulo HUD senza salvare (utile durante il trascinamento nell'editor). */
@@ -279,6 +311,79 @@ public class RoleplayConfig {
         return quickKeys;
     }
 
+    /** True se il messaggio rapido i-esimo è marcato come "minaccia" (avvia il tempo di reazione). */
+    public List<Boolean> quickThreats() {
+        return quickThreats;
+    }
+
+    public void setQuickThreat(int index, boolean threat) {
+        if (index >= 0 && index < quickThreats.size()) {
+            quickThreats.set(index, threat);
+            save();
+        }
+    }
+
+    /** Modifica la lista marcando minaccia (usata dopo un'aggiunta/rimozione). */
+    public void syncQuickThreats() {
+        while (quickThreats.size() < quickMessages.size()) quickThreats.add(false);
+        while (quickThreats.size() > quickMessages.size()) quickThreats.remove(quickThreats.size() - 1);
+        save();
+    }
+
+    // ===================== Impostazioni moduli (sezione "settings") =====================
+
+    public boolean getBool(String module, String key, boolean def) {
+        return getPrimitive(module, key) != null && getPrimitive(module, key).getAsBoolean();
+    }
+
+    public int getInt(String module, String key, int def) {
+        JsonElement e = getPrimitive(module, key);
+        if (e == null) return def;
+        try {
+            return e.getAsInt();
+        } catch (Exception ex) {
+            return def;
+        }
+    }
+
+    public float getFloat(String module, String key, float def) {
+        JsonElement e = getPrimitive(module, key);
+        if (e == null) return def;
+        try {
+            return e.getAsFloat();
+        } catch (Exception ex) {
+            return def;
+        }
+    }
+
+    public String getString(String module, String key, String def) {
+        JsonElement e = getPrimitive(module, key);
+        if (e == null) return def;
+        try {
+            return e.getAsString();
+        } catch (Exception ex) {
+            return def;
+        }
+    }
+
+    private JsonElement getPrimitive(String module, String key) {
+        JsonObject o = settings.getAsJsonObject(module);
+        if (o == null) return null;
+        return o.has(key) ? o.get(key) : null;
+    }
+
+    public void set(String module, String key, Object value) {
+        JsonObject o = settings.getAsJsonObject(module);
+        if (o == null) {
+            o = new JsonObject();
+            settings.add(module, o);
+        }
+        if (value instanceof Boolean b) o.addProperty(key, b);
+        else if (value instanceof Number n) o.addProperty(key, n);
+        else o.addProperty(key, String.valueOf(value));
+        save();
+    }
+
     public List<Waypoint> waypoints() {
         return waypoints;
     }
@@ -296,6 +401,7 @@ public class RoleplayConfig {
 
             JsonObject pos = new JsonObject();
             for (Map.Entry<String, HudPos> e : positions.entrySet()) {
+                if (!Packages.exists(e.getKey())) continue;
                 JsonObject o = new JsonObject();
                 o.addProperty("x", e.getValue().x());
                 o.addProperty("y", e.getValue().y());
@@ -329,6 +435,12 @@ public class RoleplayConfig {
             for (String k : quickKeys) qk.add(k);
             obj.add("quickKeys", qk);
 
+            JsonArray qt = new JsonArray();
+            for (Boolean t : quickThreats) qt.add(t != null && t);
+            obj.add("quickThreats", qt);
+
+            obj.add("settings", settings);
+
             JsonArray wp = new JsonArray();
             for (Waypoint w : waypoints) {
                 JsonObject o = new JsonObject();
@@ -344,7 +456,9 @@ public class RoleplayConfig {
             JsonArray al = new JsonArray();
             for (Alarm a : alarms) {
                 JsonObject o = new JsonObject();
-                o.addProperty("time", a.time());
+                String t = a.time();
+                if (t.length() == 4 && t.charAt(1) == ':') t = "0" + t;
+                o.addProperty("time", t);
                 o.addProperty("message", a.message());
                 o.addProperty("enabled", a.enabled());
                 al.add(o);

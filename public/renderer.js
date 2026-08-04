@@ -89,6 +89,16 @@ document.addEventListener('pointerdown', (e) => {
 
 // ===== Minecraft Skin Avatar (CSS 3D) =====
 const skinCache = new Map();
+const SKIN_CACHE_MAX = 128;
+
+function skinCacheSet(key, value) {
+    if (skinCache.has(key)) skinCache.delete(key);
+    else if (skinCache.size >= SKIN_CACHE_MAX) {
+        const first = skinCache.keys().next().value;
+        skinCache.delete(first);
+    }
+    skinCache.set(key, value);
+}
 
 function imageDataUrl(src) {
     return new Promise((resolve) => {
@@ -112,7 +122,7 @@ async function loadSkinTexture(uuid) {
     const img = dataUrl ? await imageDataUrl(dataUrl) : null;
     const src = img || await imageDataUrl('steve.png');
     const norm = src ? Avatar.normalizeSkin(src) : null;
-    skinCache.set(key, norm);
+    skinCacheSet(key, norm);
     return norm;
 }
 
@@ -167,11 +177,14 @@ function loadBodyRender(uuid) {
 }
 
 // ===== Accounts =====
+function accKey(a) { return (a && a.uuid ? a.uuid : '') + '|' + (a && a.type ? a.type : ''); }
+
 function getActive() {
     const accs = config.accounts || [];
     if (!accs.length) return null;
-    if (config.lastUsername) {
-        const found = accs.find(a => a.name === config.lastUsername);
+    const target = config.lastUsername && config.lastAccountType ? config.lastUsername + '|' + config.lastAccountType : '';
+    if (target) {
+        const found = accs.find(a => accKey(a) === target);
         if (found) return found;
     }
     return accs[0];
@@ -194,8 +207,8 @@ function renderDropdown() {
     const active = getActive();
     let html = '';
     accs.forEach(a => {
-        const isActive = active && a.name === active.name;
-        html += `<div class="dd-item ${isActive ? 'active' : ''}" role="button" tabindex="0" data-name="${esc(a.name)}">
+        const isActive = active && accKey(a) === accKey(active);
+        html += `<div class="dd-item ${isActive ? 'active' : ''}" role="button" tabindex="0" data-key="${esc(accKey(a))}">
             <div class="dd-avatar">${esc(a.name.charAt(0).toUpperCase())}</div>
             <div class="dd-info"><div class="dd-name">${esc(a.name)}</div><div class="dd-type">${a.type === 'microsoft' ? 'Premium' : 'Offline'}</div></div>
             ${isActive ? '<svg class="dd-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>' : ''}
@@ -207,15 +220,16 @@ function renderDropdown() {
     $('acc-dropdown').innerHTML = html;
 
     $('acc-dropdown').querySelectorAll('.dd-item').forEach(el => {
-        const a = accs.find(x => x.name === el.dataset.name);
+        const a = accs.find(x => accKey(x) === el.dataset.key);
         refreshAvatar(el.querySelector('.dd-avatar'), a && a.type === 'microsoft' ? a.uuid : null, 21);
         el.addEventListener('click', async (e) => {
             if (e.target.closest('.dd-remove')) {
                 e.stopPropagation();
                 if (confirm('Rimuovere questo account?')) {
-                    config.accounts = config.accounts.filter(a => a.name !== el.dataset.name);
-                    if (config.lastUsername === el.dataset.name) {
-                        config.lastUsername = config.accounts[0]?.name || '';
+                    const removedKey = el.dataset.key;
+                    config.accounts = config.accounts.filter(a => accKey(a) !== removedKey);
+                    if (config.lastUsername && config.lastAccountType && accKey({ uuid: config.lastUsername, type: config.lastAccountType }) === removedKey) {
+                        config.lastUsername = config.accounts[0]?.uuid || '';
                         config.lastAccountType = config.accounts[0]?.type || null;
                     }
                     await window.electronAPI.saveConfig(config);
@@ -224,12 +238,15 @@ function renderDropdown() {
                 }
                 return;
             }
-            config.lastUsername = el.dataset.name;
-            config.lastAccountType = config.accounts.find(a => a.name === el.dataset.name)?.type;
-            await window.electronAPI.saveConfig(config);
-            updateUI();
-            $('acc-dropdown').classList.remove('show');
-            toast(`Account ${el.dataset.name} selezionato`, 'success');
+            const targetAcc = accs.find(a => accKey(a) === el.dataset.key);
+            if (targetAcc) {
+                config.lastUsername = targetAcc.uuid;
+                config.lastAccountType = targetAcc.type;
+                await window.electronAPI.saveConfig(config);
+                updateUI();
+                $('acc-dropdown').classList.remove('show');
+                toast(`Account ${targetAcc.name} selezionato`, 'success');
+            }
         });
     });
 
@@ -547,7 +564,7 @@ async function loadModsList() {
         const isProtected = ['fabric-api', 'roleplayclient'].some(p => m.fileName.toLowerCase().includes(p));
         const color = modColor(m.id);
         const name = KNOWN_MOD_NAMES[m.fileName.replace(/\.jar$/i, '').toLowerCase()] || m.name;
-        const icon = `<div class="mod-icon" style="background:${color}20;color:${color};">${esc(name.charAt(0))}${m.iconUrl ? `<img class="mod-icon-img" src="${esc(m.iconUrl)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
+        const icon = `<div class="mod-icon" style="background:${color}20;color:${color};">${esc(name.charAt(0))}${m.iconUrl ? `<img class="mod-icon-img" src="${esc(m.iconUrl)}" alt="" loading="lazy">` : ''}</div>`;
         return `
         <div class="mod-card" data-mod="${esc(m.fileName)}">
             ${icon}
@@ -560,6 +577,9 @@ async function loadModsList() {
         </div>`;
     }).join('');
 
+    container.querySelectorAll('.mod-icon-img').forEach(img => {
+        img.addEventListener('error', () => img.remove());
+    });
     container.querySelectorAll('.mod-del').forEach(btn => {
         btn.addEventListener('click', async () => {
             if (!confirm('Eliminare definitivamente questa mod?')) return;
@@ -722,6 +742,9 @@ async function modrinthLoad(mcVersion, state) {
             return;
         }
         results.innerHTML = hits.map((h, i) => modrinthHitHtml(h, i, installedFiles)).join('');
+        results.querySelectorAll('.mod-icon-img').forEach(img => {
+            img.addEventListener('error', () => img.remove());
+        });
         results.querySelectorAll('.modrinth-install').forEach(btn => {
             const hit = hits[Number(btn.dataset.idx)];
             btn.addEventListener('click', () => installFromModrinth(hit, btn, mcVersion));
@@ -737,7 +760,7 @@ function modrinthHitHtml(h, idx, installedFiles) {
     return `
     <div class="mod-card">
         ${h.icon_url
-            ? `<div class="mod-icon" style="background:#FCAD1420;color:#FCAD14;">${esc((h.title || '?').charAt(0))}<img class="mod-icon-img" src="${esc(h.icon_url)}" alt="" loading="lazy" onerror="this.remove()"></div>`
+            ? `<div class="mod-icon" style="background:#FCAD1420;color:#FCAD14;">${esc((h.title || '?').charAt(0))}<img class="mod-icon-img" src="${esc(h.icon_url)}" alt="" loading="lazy"></div>`
             : `<div class="mod-icon" style="background:#FCAD1420;color:#FCAD14;">${esc((h.title || '?').charAt(0))}</div>`}
         <div class="mod-info">
             <div class="mod-name">${esc(h.title || h.slug)} ${isInstalled ? '<span class="badge badge-green" style="margin-left:6px;">Già installata</span>' : ''}</div>
@@ -1212,9 +1235,10 @@ async function msLogin() {
         const r = await window.electronAPI.microsoftLogin();
         if (r.success && r.account) {
             if (!config.accounts) config.accounts = [];
-            const idx = config.accounts.findIndex(a => a.name === r.account.name);
+            const newKey = accKey(r.account);
+            const idx = config.accounts.findIndex(a => accKey(a) === newKey);
             if (idx >= 0) config.accounts[idx] = r.account; else config.accounts.push(r.account);
-            config.lastUsername = r.account.name;
+            config.lastUsername = r.account.uuid;
             config.lastAccountType = r.account.type;
             await window.electronAPI.saveConfig(config);
             $('login-overlay').classList.add('hidden');
@@ -1238,9 +1262,10 @@ async function offLogin() {
         // derivato dal nome nel main secondo la convenzione OfflinePlayer.
         const acc = { name: nick, uuid: 'offline-' + nick.toLowerCase(), type: 'offline' };
         if (!config.accounts) config.accounts = [];
-        if (config.accounts.some(a => a.type === 'offline' && a.name.toLowerCase() === nick.toLowerCase())) {
-            config.lastUsername = nick;
-            config.lastAccountType = 'offline';
+        const newKey = accKey(acc);
+        if (config.accounts.some(a => accKey(a) === newKey)) {
+            config.lastUsername = acc.uuid;
+            config.lastAccountType = acc.type;
             await window.electronAPI.saveConfig(config);
             $('login-overlay').classList.add('hidden');
             $('app').style.display = 'grid';
@@ -1249,7 +1274,7 @@ async function offLogin() {
             return;
         }
         config.accounts.push(acc);
-        config.lastUsername = acc.name;
+        config.lastUsername = acc.uuid;
         config.lastAccountType = acc.type;
         await window.electronAPI.saveConfig(config);
         $('login-overlay').classList.add('hidden');
@@ -1294,7 +1319,7 @@ async function play() {
                 const refreshed = await window.electronAPI.microsoftRefresh(acc);
                 if (refreshed?.success && refreshed.account) {
                     account = refreshed.account;
-                    const idx = config.accounts.findIndex(a => a.uuid === acc.uuid || a.name === acc.name);
+                    const idx = config.accounts.findIndex(a => accKey(a) === accKey(acc));
                     if (idx >= 0) config.accounts[idx] = { ...config.accounts[idx], ...account };
                     await window.electronAPI.saveConfig(config);
                 }
@@ -1389,6 +1414,14 @@ async function init() {
 
     // Play
     $('play-btn').addEventListener('click', play);
+    const pCancelBtn = $('p-cancel');
+    if (pCancelBtn) pCancelBtn.addEventListener('click', () => { window.electronAPI.cancelDownload(); toast('Download annullato', 'info'); });
+
+    // Home shortcuts (CSP: niente onclick inline)
+    $('btn-versions')?.addEventListener('click', () => navigate('versions'));
+    $('btn-mods')?.addEventListener('click', () => navigate('mods'));
+    $('tab-ms-btn')?.addEventListener('click', () => switchTab('ms'));
+    $('tab-off-btn')?.addEventListener('click', () => switchTab('off'));
 
     // Close login on backdrop
     $('login-overlay').addEventListener('click', e => { if (e.target === $('login-overlay') && getActive()) $('login-overlay').classList.add('hidden'); });
