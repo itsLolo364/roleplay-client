@@ -1,6 +1,6 @@
 {
   "name": "roleplay-client",
-  "version": "1.0.0",
+  "version": "v0.2.3-beta",
   "description": "Roleplay Client - Minecraft Launcher",
   "main": "src/main.js",
   "scripts": {
@@ -14,7 +14,8 @@
     "package:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1",
     "package:installer:quick": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-installer.ps1 -SkipMod",
     "package:linux": "bash ./scripts/package-linux.sh",
-    "package:linux:quick": "bash ./scripts/package-linux.sh --skip-mod"
+    "package:linux:quick": "bash ./scripts/package-linux.sh --skip-mod",
+    "publish": "node scripts/publish.js"
   },
   "author": {
     "name": "Giovyx90",

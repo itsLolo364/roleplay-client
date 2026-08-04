@@ -36,6 +36,7 @@ public class KeybindsScreen extends Screen {
         binds.add(RoleplayClientMod.QUICK_KEY);
         binds.add(RoleplayClientMod.VOLTI_KEY);
         binds.add(RoleplayClientMod.STOPWATCH_KEY);
+        binds.add(RoleplayClientMod.RC_GUI_KEY);
     }
 
     @Override

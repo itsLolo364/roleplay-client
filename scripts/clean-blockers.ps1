@@ -5,7 +5,7 @@ $distUnpacked = Join-Path $Root "dist\win-unpacked"
 $appAsar = Join-Path $distUnpacked "resources\app.asar"
 
 $targets = @("Roleplay Client", "roleplay-client", "RoleplayClient")
-$processes = @("node.exe", "electron.exe")
+$processes = @("electron.exe")
 $processes += $targets | ForEach-Object { $_ + ".exe" }
 
 $blockers = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {

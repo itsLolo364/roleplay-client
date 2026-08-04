@@ -25,18 +25,19 @@ public class MinecraftClientMixin {
             return screen;
         }
         MinecraftClient client = (MinecraftClient) (Object) this;
+        boolean vanillaGui = RoleplayClientMod.config().getBool("rctitle", "vanilla", false);
         if (screen.getClass() == TitleScreen.class) {
-            if (RoleplayClientMod.config().getBool("rctitle", "vanilla", false)) {
-                return screen;
-            }
+            if (vanillaGui) return screen;
             boolean fade = readBool(screen, "doBackgroundFade", true);
             return new RcTitleScreen(fade);
         }
         if (screen.getClass() == GameMenuScreen.class) {
-            boolean pauseOnly = readBool(screen, "pauseOnly", false);
+            if (vanillaGui) return screen;
+            boolean pauseOnly = readBool(screen, "showMenu", true);
             return new RcPauseScreen(pauseOnly);
         }
         if (screen.getClass() == OptionsScreen.class) {
+            if (vanillaGui) return screen;
             Screen parent = client.currentScreen;
             if (parent == null
                     || parent instanceof OptionsScreen

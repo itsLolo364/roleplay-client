@@ -152,6 +152,27 @@ Il JAR finisce in `loloclient-mod/build/libs/roleplayclient-*.jar`.
 
 In `npm start` il launcher copia il JAR buildato in `assets/mods/roleplayclient.jar` tramite `deployModJar()`. L’installer invece include già la copia fatta dallo script di packaging.
 
+### Publish automatico (commit + release)
+
+```bash
+npm run publish
+```
+
+Script interattivo `scripts/publish.js`: fa una serie di domande (messaggio del
+commit, versione della release, tag, file con il contenuto delle release notes,
+build della mod e degli **asset per Linux e Windows**, push e creazione della
+release su GitHub via `gh`) e poi esegue in sequenza: bump di `package.json` +
+`gradle.properties` (`mod_version`), build della mod e copia del JAR in
+`assets/mods/`, **build automatica degli asset** in `dist/`:
+`scripts/package-linux.sh` (`.deb` + `.AppImage`) e
+`scripts/package-installer.ps1` (installer NSIS `.exe`), commit, tag, push e
+`gh release create` con le note lette dal file scelto e gli asset appena
+generati.
+
+Ogni piattaforma è best-effort: se i tool per una piattaforma mancano la build
+viene saltata con un warning senza bloccare le altre. Annullabile in qualunque
+momento con `Ctrl+C` o rispondendo "no" al riepilogo finale.
+
 ---
 
 ## Architettura della Mod

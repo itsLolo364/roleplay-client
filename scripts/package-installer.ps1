@@ -16,7 +16,8 @@
 #>
 param(
     [switch]$SkipMod,
-    [switch]$SkipNpmInstall
+    [switch]$SkipNpmInstall,
+    [switch]$SkipBlockers
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +35,7 @@ function Stop-BuildBlockers {
     $appAsar = Join-Path $distUnpacked "resources\app.asar"
 
     $targets = @("Roleplay Client", "roleplay-client", "RoleplayClient")
-    $processes = @("node.exe", "electron.exe")
+    $processes = @("electron.exe")
     $processes += $targets | ForEach-Object { $_ + ".exe" }
 
     $blockers = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
@@ -171,7 +172,9 @@ Write-Step "electron-builder - installer NSIS Windows"
 # Evita winCodeSign (symlink Darwin falliscono senza privilegi admin / Developer Mode)
 $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
 $env:ELECTRON_BUILDER_DISABLE_CODE_SIGNING = "true"
-    Stop-BuildBlockers -Root $Root
+    if (-not $SkipBlockers) {
+        Stop-BuildBlockers -Root $Root
+    }
     npm run build:win
     if ($LASTEXITCODE -ne 0) { Fail "electron-builder fallito (exit $LASTEXITCODE)" }
 

@@ -16,8 +16,11 @@ import java.util.concurrent.CompletableFuture;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.Element;
+import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.option.ControlsOptionsScreen;
+import net.minecraft.client.gui.screen.option.OptionsScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.OptionListWidget;
 import net.minecraft.client.option.KeyBinding;
@@ -43,6 +46,9 @@ import net.roleplayclient.modules.StopwatchManager;
 import net.roleplayclient.modules.TimersManager;
 import net.roleplayclient.modules.WaypointManager;
 import net.roleplayclient.screen.ModMenuScreen;
+import net.roleplayclient.screen.RcOptionsScreen;
+import net.roleplayclient.screen.RcPauseScreen;
+import net.roleplayclient.screen.RcTitleScreen;
 
 public class RoleplayClientMod implements ClientModInitializer {
     public static final String MOD_ID = "roleplay-client";
@@ -58,6 +64,8 @@ public class RoleplayClientMod implements ClientModInitializer {
             InputUtil.Type.KEYSYM, InputUtil.GLFW_KEY_V, "key.category.roleplay-client");
     public static final KeyBinding STOPWATCH_KEY = new KeyBinding("key.roleplay-client.stopwatch",
             InputUtil.Type.KEYSYM, InputUtil.GLFW_KEY_F10, "key.category.roleplay-client");
+    public static final KeyBinding RC_GUI_KEY = new KeyBinding("key.roleplay-client.gui",
+            InputUtil.Type.KEYSYM, InputUtil.GLFW_KEY_F6, "key.category.roleplay-client");
 
     private static RoleplayConfig config;
     private static float zoomSmooth = 0f;
@@ -106,6 +114,7 @@ public class RoleplayClientMod implements ClientModInitializer {
         KeyBindingHelper.registerKeyBinding(QUICK_KEY);
         KeyBindingHelper.registerKeyBinding(VOLTI_KEY);
         KeyBindingHelper.registerKeyBinding(STOPWATCH_KEY);
+        KeyBindingHelper.registerKeyBinding(RC_GUI_KEY);
 
         // Pulsante "Roleplay Client Mods" dentro Opzioni -> Controlli, sotto "Impostazioni tasti"
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
@@ -195,6 +204,12 @@ public class RoleplayClientMod implements ClientModInitializer {
             if (config.isEnabled("rpstopwatch")) StopwatchManager.toggle();
         }
 
+        // Passa dalla GUI Roleplay Client alla GUI default di Minecraft (e viceversa)
+        while (RC_GUI_KEY.wasPressed()) {
+            toggleVanillaGui(client);
+            break; // un solo scambio per pressione
+        }
+
         FacesManager.tick();
         WaypointManager.tick();
         AlarmManager.tick();
@@ -204,6 +219,41 @@ public class RoleplayClientMod implements ClientModInitializer {
         DesyncAlertManager.tick();
         ClipReadyManager.tick();
         HudRenderer.tickFps();
+    }
+
+    /**
+     * Commuta la modalità GUI tra Roleplay Client e default di Minecraft.
+     * Funziona da qualsiasi schermata (anche in partita, senza schermata aperta):
+     * apre l'equivalente vanilla o RC della schermata corrente e salva lo stato.
+     */
+    private static void toggleVanillaGui(MinecraftClient client) {
+        RoleplayConfig cfg = config;
+        boolean vanilla = cfg.getBool("rctitle", "vanilla", false);
+        boolean nextVanilla = !vanilla;
+        cfg.set("rctitle", "vanilla", nextVanilla);
+
+        Screen cur = client.currentScreen;
+        boolean inWorld = client.world != null;
+        Screen next;
+        if (nextVanilla) {
+            if (cur instanceof RcPauseScreen || (cur == null && inWorld)) {
+                next = new GameMenuScreen(true);
+            } else if (cur instanceof RcOptionsScreen) {
+                next = new OptionsScreen(inWorld ? new GameMenuScreen(true) : new TitleScreen(), client.options);
+            } else {
+                next = new TitleScreen();
+            }
+        } else {
+            if (cur instanceof GameMenuScreen || (cur == null && inWorld)) {
+                next = new RcPauseScreen(true);
+            } else if (cur instanceof OptionsScreen) {
+                next = new RcOptionsScreen(inWorld ? new RcPauseScreen(true) : new RcTitleScreen(), client.options);
+            } else {
+                next = new RcTitleScreen();
+            }
+        }
+        showToast(nextVanilla ? "GUI Minecraft (vanilla)" : "GUI Roleplay Client");
+        client.setScreen(next);
     }
 
     private static void applyWindowIconOnce(MinecraftClient client) {

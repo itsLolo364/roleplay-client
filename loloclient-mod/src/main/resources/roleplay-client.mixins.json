@@ -8,6 +8,8 @@
         "ChatHudSearchMixin",
         "ChatScreenSearchMixin",
         "TitleScreenMixin",
+        "GameMenuScreenMixin",
+        "OptionsScreenMixin",
         "PlayerListHudMixin",
         "MinecraftClientMixin",
         "MinecraftClientScreenshotMixin",
